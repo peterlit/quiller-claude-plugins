@@ -1,0 +1,11 @@
+{
+  "name": "quiller",
+  "owner": { "name": "Peter Litskevitch" },
+  "plugins": [
+    {
+      "name": "review-loop-tools",
+      "source": "./",
+      "description": "Adversarial implementer/reviewer convergence loop."
+    }
+  ]
+}
