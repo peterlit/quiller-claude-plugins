@@ -4,8 +4,13 @@
   "plugins": [
     {
       "name": "review-loop-tools",
-      "source": "./",
+      "source": "./review-loop-tools",
       "description": "Adversarial implementer/reviewer convergence loop."
+    },
+    {
+      "name": "qa-loop-tools",
+      "source": "./qa-loop-tools",
+      "description": "Simulator-driven UX/QA convergence loop for iOS apps."
     }
   ]
 }

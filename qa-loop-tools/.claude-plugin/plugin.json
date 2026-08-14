@@ -1,0 +1,8 @@
+{
+  "name": "qa-loop-tools",
+  "version": "0.1.0",
+  "description": "Simulator-driven QA/UX convergence loop for iOS apps: persona-based testing, evidence-backed findings, thrashing detection, and an iteration backstop.",
+  "author": { "name": "Peter Litskevitch" },
+  "keywords": ["qa", "ux", "ios", "simulator", "testing", "agents", "convergence"],
+  "license": "MIT"
+}
