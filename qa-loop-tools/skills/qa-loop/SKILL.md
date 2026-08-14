@@ -19,6 +19,11 @@ subagents. You are PLUMBING ONLY.
   implementer's unverified claims — never your own summary of what changed.
 - All loop state lives in the TARGET REPO at `.qa-loop/`. Never write it into
   the plugin directory. Suggest adding `.qa-loop/evidence/` to .gitignore.
+- Dispatch subagents in the FOREGROUND (run_in_background: false) and wait for
+  the result — a visible in-progress dispatch beats an ended turn that looks
+  dead. NEVER end your turn while a dispatch is pending or merely promised. If
+  the harness forces a dispatch into the background anyway, say so explicitly
+  and tell the user the session will resume on its own when it completes.
 
 ## Stage 0 — Preflight (start of every round)
 Build the app (use the project's own build command), install it on a booted
@@ -42,8 +47,13 @@ In later rounds you may update WORKFLOWS.md when app functionality changes, but
 material edits are FLAGGED in the report — never re-gated on the human.
 
 ## Stage 2 — Test cases (once; refresh only affected workflows later)
-Dispatch `ux-tester` in EXPLORATION mode with WORKFLOWS.md: it runs the app
-against each workflow in both personas and writes `.qa-loop/TESTCASES.md`.
+Dispatch `ux-tester` in EXPLORATION mode in CHUNKS — one dispatch per workflow,
+or batches of at most 3 workflows: each dispatch runs its workflows in both
+personas, APPENDS its test cases to `.qa-loop/TESTCASES.md`, and returns a
+one-line summary. Print a one-line progress update between dispatches
+("WF-4/12 explored, 2 candidate concerns"). Never send all workflows to a
+single dispatch — a monolithic pass runs silently for tens of minutes and can
+exhaust the tester's context with screenshots before it writes anything.
 In later rounds, refresh only the test cases for workflows whose screens
 changed.
 
@@ -60,11 +70,14 @@ changed.
    - Otherwise TARGETED: test cases whose workflows/screens are touched by the
      diff since the last build_sha, the repro steps of every open or
      claimed-fixed finding, plus a small fixed smoke set.
-5. Dispatch `ux-tester` in TEST mode with: the test set, the prior ledger.json,
-   the evidence directory `.qa-loop/evidence/round-<N>/`, and (round >= 2) the
-   diff since the last round's build_sha plus the implementer's CHANGES block
-   labeled as claims to validate. Wait for its LEDGER block, then stop the
-   sampler.
+5. Dispatch `ux-tester` in TEST mode in CHUNKS (one dispatch per workflow, or
+   batches of at most 3), each with: its slice of the test set, the prior
+   ledger.json, the evidence directory `.qa-loop/evidence/round-<N>/`, and
+   (round >= 2) the diff since the last round's build_sha plus the
+   implementer's CHANGES block labeled as claims to validate. Each chunk
+   returns a LEDGER fragment covering its slice; print a one-line progress
+   update between chunks, then merge the fragments in step 6. Stop the sampler
+   after the last chunk.
 6. Merge the LEDGER into ledger.json (append to each finding's status_history;
    add new findings; update current_status).
 7. Run metrics and read its decision:

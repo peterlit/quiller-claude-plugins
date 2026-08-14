@@ -37,6 +37,10 @@ implementer's inherit.)
 - Every finding carries: exact repro steps (the tap/swipe sequence from a fresh
   launch), screenshot path(s) saved into the evidence directory you were given,
   and measurements where applicable.
+- Work incrementally: append each workflow's test cases (exploration mode) and
+  save each finding's evidence files (test mode) as soon as that workflow
+  completes — never hold everything back for one final write. Partial work must
+  survive an interruption.
 - Set confidence: confirmed (you observed it and reproduced it) vs suspected
   (seen once, or inferred). Never present a suspected finding as confirmed.
 - Latency: take timestamped screenshots around an action. Visible no-response
