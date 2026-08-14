@@ -21,7 +21,7 @@ for d in .review-loop .qa-loop; do
     phase="$(cat "$d/.phase")"
     case "$phase" in
       round*)
-        echo "loop_guard: $d round in flight (phase: $phase). Do not end the turn — continue the loop. If the loop is genuinely finished or waiting on the human, first update $d/.phase to 'done' or 'awaiting-human'." >&2
+        echo "loop_guard: $d round in flight (phase: $phase). If you have NOT yet dispatched this phase's subagent, do so now — do not end the turn on a promise. If a subagent you already dispatched is still running in the background, do NOT dispatch a duplicate: say you are waiting for it and stop (the session resumes when it completes). If the loop is genuinely finished or waiting on the human, first update $d/.phase to 'done' or 'awaiting-human'." >&2
         exit 2
         ;;
     esac
