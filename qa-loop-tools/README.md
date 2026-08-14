@@ -81,6 +81,18 @@ network) come from a short serial perf lane on a single uncontended simulator
 afterwards. Single-tester mode (the default) keeps the sampler running through
 the whole pass, as before.
 
+## Token efficiency and hooks
+
+Findings JSON never transits the orchestrator: testers write LEDGER fragments
+to `.qa-loop/fragments/` and `scripts/merge_ledger.py` merges them
+deterministically (including cross-worker evidence unions). Testers compute
+the round diff themselves from a sha range. Three hooks guard the loop at zero
+token cost: a `Stop` hook blocks the orchestrator from ending its turn while a
+round is in flight (tracked via `.qa-loop/.phase`), a `SubagentStop` hook
+validates fragment JSON before a subagent may finish, and the same optional
+commit guard as review-loop-tools (`REVIEW_LOOP_MAX_DIFF`,
+`REVIEW_LOOP_TEST_CMD`) can gate implementer commits.
+
 ## Loop state
 
 Everything lives in the **target repository** under `.qa-loop/`:

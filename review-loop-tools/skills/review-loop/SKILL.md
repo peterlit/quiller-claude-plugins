@@ -8,10 +8,18 @@ You orchestrate an iterative review loop between the `implementer` and
 ## Hard rules (do not violate)
 - You NEVER modify source code yourself. You dispatch, record state, compute
   metrics, and decide whether to continue.
-- The reviewer's input for each round is the RAW DIFF computed by git
-  (`git diff <round_start_sha>..HEAD`), never your own summary of what changed.
-  The implementer's CHANGES block travels along, clearly labeled as the
-  implementer's unverified claims — never as your account of the work.
+- The reviewer's input for each round is the RAW DIFF computed by git. Pass the
+  reviewer the sha range (`<round_start_sha>..HEAD`) and it runs `git diff` on
+  it itself — the diff enters only the reviewer's context, and you never paste
+  or summarize what changed. The implementer's CHANGES block travels along,
+  clearly labeled as the implementer's unverified claims — never as your
+  account of the work.
+- You NEVER hand-edit ledger.json. The reviewer writes its LEDGER to a
+  fragment file, and every merge goes through merge_ledger.py.
+- Maintain the phase marker `.review-loop/.phase` (a Stop hook enforces it):
+  write "round-<N>-implementing" before dispatching the implementer,
+  "round-<N>-review" before dispatching the reviewer, and "done" right after
+  the final report. An ended turn while the phase says "round…" is a stall.
 - All loop state lives in the TARGET REPO at `.review-loop/`. Never write it into
   the plugin directory.
 
@@ -23,24 +31,28 @@ You orchestrate an iterative review loop between the `implementer` and
    - If a `REVIEW.md` exists at the repo root, dispatch `skeptical-reviewer` to
      convert it into the LEDGER schema.
    - Otherwise dispatch `skeptical-reviewer` for a cold full review of HEAD.
-   Merge its LEDGER into ledger.json.
+   Tell it to write its LEDGER to `.review-loop/fragments/seed.json`, then merge:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .review-loop/ledger.json .review-loop/fragments/seed.json 1`
 
 ## Each round (N = 1 .. max_rounds)
 1. Set round_start_sha = current HEAD; persist it in ledger.json; set round = N.
-2. Dispatch `implementer` with the OPEN findings + the reviewer's latest report.
+2. Write "round-<N>-implementing" to `.review-loop/.phase`. Dispatch
+   `implementer` with the OPEN findings + the reviewer's latest summary.
    Wait for its CHANGES block and confirm it committed.
-3. Compute the diff: `git diff <round_start_sha>..HEAD`.
-4. Dispatch `skeptical-reviewer` with: the prior ledger.json + the diff from
-   step 3 + the implementer's CHANGES block (labeled as claims to validate).
-   Wait for its updated LEDGER block.
-5. Merge the reviewer's LEDGER into ledger.json (append to each finding's
-   status_history; add new findings; update current_status).
-6. Run metrics and read its decision:
+3. Write "round-<N>-review" to `.review-loop/.phase`. Dispatch
+   `skeptical-reviewer` with: the path to the prior ledger.json, the sha range
+   `<round_start_sha>..HEAD` (it runs `git diff` on it itself — do NOT paste
+   the diff), the implementer's CHANGES block (labeled as claims to validate),
+   and the fragment path `.review-loop/fragments/round-<N>.json` where it must
+   write its LEDGER. It returns a short summary only.
+4. Merge deterministically — never by hand:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .review-loop/ledger.json .review-loop/fragments/round-<N>.json <N>`
+5. Run metrics and read its decision:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/metrics.py .review-loop/ledger.json <N>`
    It appends a row to `.review-loop/rounds.md` and prints a JSON verdict with a
    `decision` field.
-7. Act on `decision`: if `continue`, go to round N+1; otherwise stop and write the
-   final report.
+6. Act on `decision`: if `continue`, go to round N+1; otherwise write the final
+   report, then set `.review-loop/.phase` to "done".
 
 ## Stop conditions (computed by metrics.py, evaluated in this order)
 - CONVERGED: 0 open blockers AND 0 open majors AND no new blockers/majors this

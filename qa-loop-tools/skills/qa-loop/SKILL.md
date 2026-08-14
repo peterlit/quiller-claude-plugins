@@ -14,9 +14,17 @@ subagents. You are PLUMBING ONLY.
   (seed fixture data if the project provides a way), and record the repo's
   current commit sha in ledger.json as this round's build_sha. Findings are not
   comparable across rounds that start from leftover state.
-- The tester's round input is the prior ledger + the git diff since the last
-  round's build_sha + the implementer's CHANGES block, labeled as the
-  implementer's unverified claims — never your own summary of what changed.
+- The tester's round input is the prior ledger + the sha range since the last
+  round's build_sha (the tester runs `git diff` on it itself — you never paste
+  or summarize the diff) + the implementer's CHANGES block, labeled as the
+  implementer's unverified claims.
+- You NEVER hand-edit ledger.json. Testers write LEDGER fragments to files,
+  and every merge goes through merge_ledger.py.
+- Maintain the phase marker `.qa-loop/.phase` (a Stop hook enforces it): write
+  "round-<N>-testing" before dispatching testers, "round-<N>-implementing"
+  before dispatching the implementer, "awaiting-human" when stopping at the
+  Stage 1 gate, and "done" right after the final report. An ended turn while
+  the phase says "round…" is a stall.
 - All loop state lives in the TARGET REPO at `.qa-loop/`. Never write it into
   the plugin directory. Suggest adding `.qa-loop/evidence/` to .gitignore.
 - Dispatch subagents in the FOREGROUND (run_in_background: false) and wait for
@@ -41,14 +49,16 @@ implementer dispatch for this round.
    power user = efficiency and rare-but-legit complex tasks), workflows with
    stable IDs (WF-1, WF-2, …), and each workflow's reasonable-effort
    expectation (e.g. "WF-2: log a purchase — <= 3 taps for a power user").
-3. STOP and ask the human to review WORKFLOWS.md. When they respond, RE-READ
-   the file (they may have edited it directly) and reconcile their feedback
-   before proceeding. Do not start testing without this sign-off.
+3. Write "awaiting-human" to `.qa-loop/.phase`, then STOP and ask the human to
+   review WORKFLOWS.md. When they respond, RE-READ the file (they may have
+   edited it directly) and reconcile their feedback before proceeding. Do not
+   start testing without this sign-off.
 In later rounds you may update WORKFLOWS.md when app functionality changes, but
 material edits are FLAGGED in the report — never re-gated on the human.
 
 ## Stage 2 — Test cases (once; refresh only affected workflows later)
-Dispatch `ux-tester` in EXPLORATION mode in CHUNKS — one dispatch per workflow,
+Write "round-0-testing" to `.qa-loop/.phase` (exploration counts as in-flight
+work for the stall guard). Dispatch `ux-tester` in EXPLORATION mode in CHUNKS — one dispatch per workflow,
 or batches of at most 3 workflows: each dispatch runs its workflows in both
 personas, APPENDS its test cases to `.qa-loop/TESTCASES.md`, and returns a
 one-line summary. Print a one-line progress update between dispatches
@@ -67,10 +77,13 @@ changed.
    - Otherwise TARGETED: test cases whose workflows/screens are touched by the
      diff since the last build_sha, the repro steps of every open or
      claimed-fixed finding, plus a small fixed smoke set.
-4. Run the FUNCTIONAL LANE. Every chunk dispatch carries: its slice of the test
-   set, the prior ledger.json, its evidence directory, and (round >= 2) the
-   diff since the last round's build_sha plus the implementer's CHANGES block
-   labeled as claims to validate. Each returns a LEDGER fragment; print a
+4. Write "round-<N>-testing" to `.qa-loop/.phase` and run the FUNCTIONAL LANE.
+   Every chunk dispatch carries: its slice of the test set, the path to the
+   prior ledger.json, its evidence directory, the fragment path
+   `.qa-loop/fragments/round-<N>-<chunk-slug>.json` where it must write its
+   LEDGER, and (round >= 2) the sha range `<last build_sha>..HEAD` (the tester
+   runs `git diff` on it itself) plus the implementer's CHANGES block labeled
+   as claims to validate. Each chunk returns a 2-line summary only; print a
    one-line progress update per completed chunk.
    - parallel_testers == 1 (default): find the app's host PID (simulator apps
      are native macOS processes — use the pid printed by `xcrun simctl launch`,
@@ -92,21 +105,23 @@ changed.
      testers flag perf candidates instead of emitting measurement findings.
 5. PERF LANE (parallel mode only): shut down all workers but one. On that
    single uncontended simulator, with the sampler attached, dispatch one
-   `ux-tester` to run: the latency-sensitive test cases, the repeated-action
-   leak loops, and every perf candidate flagged in the functional lane.
-   Performance measurements are only trustworthy from this lane.
-6. Merge all LEDGER fragments into ledger.json (append to each finding's
-   status_history; add new findings; update current_status). Dedupe across
-   workers by finding id: when two workers report the same issue in the same
-   region, keep one id and union their evidence.
+   `ux-tester` (fragment path `.qa-loop/fragments/round-<N>-perf.json`) to
+   run: the latency-sensitive test cases, the repeated-action leak loops, and
+   every perf candidate flagged in the functional lane. Performance
+   measurements are only trustworthy from this lane.
+6. Merge deterministically — never by hand. For each fragment:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .qa-loop/ledger.json .qa-loop/fragments/round-<N>-<slug>.json <N>`
+   The script updates statuses, appends status_history, adds new findings, and
+   unions evidence when two workers report the same finding id.
 7. Run metrics and read its decision:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_metrics.py .qa-loop/ledger.json <N> <full|targeted>`
    It appends a row to `.qa-loop/rounds.md` and prints a JSON verdict with a
    `decision` field.
 8. Act on `decision`:
-   - `continue`: dispatch `qa-implementer` with the OPEN auto-routed findings,
-     the tester's report, and the evidence paths. Wait for its CHANGES block and
-     confirm it committed. Go to round N+1.
+   - `continue`: write "round-<N>-implementing" to `.qa-loop/.phase`, then
+     dispatch `qa-implementer` with the OPEN auto-routed findings, the
+     testers' summaries, and the evidence paths. Wait for its CHANGES block
+     and confirm it committed. Go to round N+1.
    - `full_pass_required`: go to round N+1 with a FULL pass and NO implementer
      dispatch (nothing to fix — you are confirming convergence on this build).
    - anything else: stop and write the final report.
@@ -140,5 +155,6 @@ Write `.qa-loop/REPORT.md`:
   proposal, each with its commit and a one-line "look here because…". This is
   the part a human should actually read, because the loop cannot catch two
   same-family agents agreeing on a fix that is wrong for real users.
-Print a one-line verdict and the path to the report. If worker simulators
-exist, tear them down: `${CLAUDE_PLUGIN_ROOT}/scripts/provision_workers.sh down`
+Print a one-line verdict and the path to the report, and set
+`.qa-loop/.phase` to "done". If worker simulators exist, tear them down:
+`${CLAUDE_PLUGIN_ROOT}/scripts/provision_workers.sh down`

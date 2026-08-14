@@ -1,6 +1,6 @@
 {
   "name": "review-loop-tools",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Adversarial implementer/reviewer convergence loop with thrashing detection and an iteration backstop.",
   "author": { "name": "Peter Litskevitch" },
   "keywords": ["code-review", "agents", "quality", "convergence"],

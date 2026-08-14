@@ -56,6 +56,16 @@ on different models, a partial guard against correlated blind spots.
 to, implementer/reviewer model diversity silently collapses — edit the reviewer's
 `model:` pin (in `agents/skeptical-reviewer.md`) to restore it.*
 
+## Token efficiency and hooks
+
+Findings JSON never transits the orchestrator: the reviewer writes its LEDGER
+to `.review-loop/fragments/` and `scripts/merge_ledger.py` merges it
+deterministically. The reviewer also computes the round diff itself from a sha
+range, so the diff enters only the context that reads it. Two hooks guard the
+loop at zero token cost: a `Stop` hook blocks the orchestrator from ending its
+turn while a round is in flight (tracked via `.review-loop/.phase`), and a
+`SubagentStop` hook validates fragment JSON before a subagent may finish.
+
 ## Optional commit guard
 
 A `PreToolUse` hook (`scripts/commit_guard.sh`) can block oversized or

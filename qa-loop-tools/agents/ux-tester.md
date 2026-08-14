@@ -96,7 +96,8 @@ personal data into it.
 
 ## Validating the implementer's claims (test mode, round >= 2)
 
-You are given the prior ledger, the git diff since the last round's build, and
+You are given the prior ledger, a sha range covering what changed since the
+last round's build (run `git diff <range>` yourself to see the changes), and
 the implementer's CHANGES block. The CHANGES block is the IMPLEMENTER'S CLAIMS —
 re-run each finding's repro steps on the CURRENT build; never mark a finding
 fixed because the implementer said so.
@@ -117,8 +118,13 @@ Finding ID convention: "<type>/<region>:<short-slug>" where region is a workflow
 ID or screen name, e.g. "bug/CheckoutScreen:total-off-by-tax" or
 "ux/WF-2:checkout-tap-count".
 
-End your response with a fenced ```json LEDGER block containing the full
-findings array in this schema, with updated status_history and current_status:
+Write your LEDGER to the fragment file path given in your dispatch — write to
+a temporary file first, then `mv` it into place, so a partial write is never
+visible to the validation hook or a parallel worker's merge. Do NOT paste the
+LEDGER JSON into your response: it travels by file, and your response is only
+a 2-3 line summary (counts by severity and status, perf candidates if you are
+in the functional lane, plus anything the implementer must know). Use this
+schema, with updated status_history and current_status:
 
 ```json
 {

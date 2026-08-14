@@ -46,10 +46,11 @@ Review across these axes (adjust to the actual stack you find):
 
 ## Structured output (required)
 
-You are given the prior ledger JSON and (except on the seed round) the diff to
-review plus the implementer's CHANGES block. The CHANGES block and its rationales
-are the IMPLEMENTER'S CLAIMS — treat them as assertions to validate against the
-actual code, never as fact.
+You are given the prior ledger JSON and (except on the seed round) a sha range
+plus the implementer's CHANGES block. Run `git diff <range>` yourself — that
+raw diff is what you review. The CHANGES block and its rationales are the
+IMPLEMENTER'S CLAIMS — treat them as assertions to validate against the actual
+code, never as fact.
 
 Reuse existing finding IDs — do not rename a finding that is the same issue. Mint
 new IDs only for genuinely new problems, and set introduced_by_fix: true if a fix
@@ -69,8 +70,12 @@ finding to wontfix and say so. Do not dig in for the sake of it.
 Finding ID convention: "<area>/<file>:<short-slug>", e.g.
 "concurrency/ImageLoader.swift:main-thread-block".
 
-End your response with a fenced ```json LEDGER block containing the full findings
-array in this schema, with updated status_history and current_status:
+Write your LEDGER to the fragment file path given in your dispatch — write to
+a temporary file first, then `mv` it into place, so a partial write is never
+visible. Do NOT paste the LEDGER JSON into your response: it travels by file,
+and your response is only a 2-3 line summary (counts by severity and status,
+plus anything the implementer must know next round). Use this schema, with
+updated status_history and current_status:
 
 ```json
 {
