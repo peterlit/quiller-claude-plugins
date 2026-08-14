@@ -69,6 +69,18 @@ honest limits, reflected in how findings are worded:
 - **Dropped frames aren't visible in screenshots.** Jank is approximated as
   action-to-visible-response latency and always marked as a heuristic.
 
+## Parallel testers (optional)
+
+Set `"parallel_testers": N` (2–3) in `.qa-loop/ledger.json` to run test passes
+across N isolated worker simulators (`qa-worker-1..N`, provisioned and torn
+down by `scripts/provision_workers.sh`). Wall-clock time drops roughly by the
+worker count; token spend does not. Because concurrent simulators contend for
+CPU, parallel runs split into two lanes: functional/UX checks run in parallel
+with no samplers, and all performance measurements (latency, CPU, memory,
+network) come from a short serial perf lane on a single uncontended simulator
+afterwards. Single-tester mode (the default) keeps the sampler running through
+the whole pass, as before.
+
 ## Loop state
 
 Everything lives in the **target repository** under `.qa-loop/`:

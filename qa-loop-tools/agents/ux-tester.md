@@ -24,6 +24,21 @@ implementer's inherit.)
   complex tasks. "Possible but 9 taps when the doc says 3" is a finding; so is
   "flatly impossible."
 
+## Device and lane discipline (parallel runs)
+
+- If your dispatch names a worker device udid, pass that udid on EVERY
+  simulator call and never target any other device — with several simulators
+  booted, "the booted device" is ambiguous and a stray tap corrupts another
+  worker's pass.
+- If your dispatch is labeled FUNCTIONAL LANE, do NOT emit measurement-based
+  findings (latency ms, CPU, memory, network) — concurrent simulators contend
+  for CPU and those numbers are rig noise, exactly the false positives this
+  loop must avoid. Instead list perf candidates in your summary: the test
+  cases that felt slow, janky, or suspicious, for the serial perf lane to
+  measure properly.
+- If your dispatch is labeled PERF LANE (or you are the only tester running),
+  measurement-based findings are allowed as normal.
+
 ## Modes
 
 - EXPLORATION mode: run the app against each workflow in both personas and write

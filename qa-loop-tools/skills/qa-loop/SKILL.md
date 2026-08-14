@@ -33,8 +33,9 @@ implementer dispatch for this round.
 
 ## Stage 1 — Workflows (once; the ONLY blocking human gate)
 1. If `.qa-loop/ledger.json` doesn't exist, create it with:
-   `{ "round": 0, "build_sha": null, "max_rounds": 5, "findings": [] }`
-   (use the user's max_rounds if they gave one).
+   `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "findings": [] }`
+   (use the user's max_rounds and parallel_testers if they gave them; cap
+   parallel_testers at 3 — each simulator wants 2-6GB of RAM).
 2. If `.qa-loop/WORKFLOWS.md` doesn't exist: read the code, docs, and app
    metadata, then draft it with: persona definitions (novice = discoverability;
    power user = efficiency and rare-but-legit complex tasks), workflows with
@@ -59,27 +60,45 @@ changed.
 
 ## Each round (N = 1 .. max_rounds)
 1. Preflight (Stage 0). Set build_sha = current HEAD; persist it; set round = N.
-2. Reset app state deterministically.
-3. Find the app's host PID (simulator apps are native macOS processes — use the
-   pid printed by `xcrun simctl launch`, or `pgrep -x <AppName>`), then start
-   the sampler in the background:
-   `${CLAUDE_PLUGIN_ROOT}/scripts/nfr_sampler.sh <pid> .qa-loop/evidence/round-<N>/samples.jsonl &`
-4. Choose the test set:
+2. Reset app state deterministically (on EVERY worker device, in parallel mode).
+3. Choose the test set:
    - Round 1, or previous verdict was `full_pass_required`: FULL pass (all test
      cases).
    - Otherwise TARGETED: test cases whose workflows/screens are touched by the
      diff since the last build_sha, the repro steps of every open or
      claimed-fixed finding, plus a small fixed smoke set.
-5. Dispatch `ux-tester` in TEST mode in CHUNKS (one dispatch per workflow, or
-   batches of at most 3), each with: its slice of the test set, the prior
-   ledger.json, the evidence directory `.qa-loop/evidence/round-<N>/`, and
-   (round >= 2) the diff since the last round's build_sha plus the
-   implementer's CHANGES block labeled as claims to validate. Each chunk
-   returns a LEDGER fragment covering its slice; print a one-line progress
-   update between chunks, then merge the fragments in step 6. Stop the sampler
-   after the last chunk.
-6. Merge the LEDGER into ledger.json (append to each finding's status_history;
-   add new findings; update current_status).
+4. Run the FUNCTIONAL LANE. Every chunk dispatch carries: its slice of the test
+   set, the prior ledger.json, its evidence directory, and (round >= 2) the
+   diff since the last round's build_sha plus the implementer's CHANGES block
+   labeled as claims to validate. Each returns a LEDGER fragment; print a
+   one-line progress update per completed chunk.
+   - parallel_testers == 1 (default): find the app's host PID (simulator apps
+     are native macOS processes — use the pid printed by `xcrun simctl launch`,
+     or `pgrep -x <AppName>`) and start the sampler in the background:
+     `${CLAUDE_PLUGIN_ROOT}/scripts/nfr_sampler.sh <pid> .qa-loop/evidence/round-<N>/samples.jsonl &`
+     Then dispatch `ux-tester` in TEST mode in CHUNKS (one dispatch per
+     workflow, or batches of at most 3), sequentially. Measurement-based
+     findings are allowed — the simulator is uncontended. Stop the sampler
+     after the last chunk.
+   - parallel_testers > 1: provision workers:
+     `${CLAUDE_PLUGIN_ROOT}/scripts/provision_workers.sh up <parallel_testers>`
+     (prints worker names + udids as JSON). Install the app and reset state on
+     every worker. Partition the chunks across workers and dispatch one
+     `ux-tester` per worker IN A SINGLE MESSAGE (parallel foreground
+     dispatches). Each dispatch is labeled FUNCTIONAL LANE and carries its
+     worker's udid — the tester must pass that udid on every simulator call —
+     and its own evidence subdir `.qa-loop/evidence/round-<N>/<worker-name>/`.
+     NO samplers in this lane: concurrent simulators contend for CPU, so
+     testers flag perf candidates instead of emitting measurement findings.
+5. PERF LANE (parallel mode only): shut down all workers but one. On that
+   single uncontended simulator, with the sampler attached, dispatch one
+   `ux-tester` to run: the latency-sensitive test cases, the repeated-action
+   leak loops, and every perf candidate flagged in the functional lane.
+   Performance measurements are only trustworthy from this lane.
+6. Merge all LEDGER fragments into ledger.json (append to each finding's
+   status_history; add new findings; update current_status). Dedupe across
+   workers by finding id: when two workers report the same issue in the same
+   region, keep one id and union their evidence.
 7. Run metrics and read its decision:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_metrics.py .qa-loop/ledger.json <N> <full|targeted>`
    It appends a row to `.qa-loop/rounds.md` and prints a JSON verdict with a
@@ -121,4 +140,5 @@ Write `.qa-loop/REPORT.md`:
   proposal, each with its commit and a one-line "look here because…". This is
   the part a human should actually read, because the loop cannot catch two
   same-family agents agreeing on a fix that is wrong for real users.
-Print a one-line verdict and the path to the report.
+Print a one-line verdict and the path to the report. If worker simulators
+exist, tear them down: `${CLAUDE_PLUGIN_ROOT}/scripts/provision_workers.sh down`
