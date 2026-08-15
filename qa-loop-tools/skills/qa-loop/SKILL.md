@@ -23,8 +23,9 @@ subagents. You are PLUMBING ONLY.
 - Maintain the phase marker `.qa-loop/.phase` (a Stop hook enforces it): write
   "round-<N>-testing" before dispatching testers, "round-<N>-implementing"
   before dispatching the implementer, "round-<N>-fix-review" before
-  dispatching the fix-reviewer, "awaiting-human" when stopping at the Stage 1
-  gate, and "done" right after the final report. An ended turn while the
+  dispatching the fix-reviewer, "round-<N>-regression-tests" before
+  dispatching the regression-test-writer, "awaiting-human" when stopping at
+  the Stage 1 gate, and "done" right after the final report. An ended turn while the
   phase says "round…" is a stall.
 - All loop state lives in the TARGET REPO at `.qa-loop/`. Never write it into
   the plugin directory. Suggest adding `.qa-loop/evidence/` to .gitignore.
@@ -158,7 +159,16 @@ skew every metric downstream.
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_metrics.py .qa-loop/ledger.json <N> <full|targeted>`
    It appends a row to `.qa-loop/rounds.md` and prints a JSON verdict with a
    `decision` field.
-8. Act on `decision`:
+8. REGRESSION TESTS (only when emit_regression_tests is true): if any bug
+   finding was verified fixed by THIS round's test pass, write
+   "round-<N>-regression-tests" to `.qa-loop/.phase` and dispatch
+   `regression-test-writer` with those findings (ids, repro steps, evidence
+   paths) and the fragment path `.qa-loop/fragments/round-<N>-regression.json`
+   for any missing-identifier findings it files (merge that fragment if it
+   appears). It mines real selectors from the source, writes XCTSkip-guarded
+   tests, and commits them separately. This step runs whatever the decision
+   is — converged rounds deserve guards too.
+9. Act on `decision`:
    - `continue`:
      a. INTENT CHECKS: if any finding's routing was flipped proposal->auto
         since the last round (the human accepted a proposal), write
@@ -171,9 +181,8 @@ skew every metric downstream.
         `qa-implementer` with the OPEN auto-routed findings (including any
         whose note says FIX REJECTED — the rejection reason is part of its
         brief), their fix_risk flags and constraints, the testers' summaries,
-        and the evidence paths. If emit_regression_tests is true, ask it to
-        emit XCUITest regression skeletons for bugs verified fixed this
-        round. Wait for its CHANGES block and confirm it committed.
+        and the evidence paths. Wait for its CHANGES block and confirm it
+        committed.
      c. FIX REVIEW: write "round-<N>-fix-review" to `.qa-loop/.phase` and
         dispatch `fix-reviewer` in FIX REVIEW mode with: the sha range of the
         implementer's commits this round, the CHANGES block (labeled as

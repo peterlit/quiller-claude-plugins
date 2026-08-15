@@ -152,14 +152,19 @@ tester/implementer model diversity silently collapses — edit the tester's
 
 ## Optional: regression-test skeletons
 
-Set `"emit_regression_tests": true` in `.qa-loop/ledger.json` and, for every
-bug verified fixed, the implementer emits an **XCUITest skeleton** (Apple's
-built-in UI-testing framework: small Swift tests that launch the app, tap
-through it, and fail the build if the bug returns). Skeletons carry the repro
-steps as comments and best-effort element queries, and start with an
-`XCTSkip` so an unfinished test can never break CI — you verify the element
-selectors once, remove the skip, and the fix is guarded forever. Off by
-default because it writes into your app's UITest target.
+Set `"emit_regression_tests": true` in `.qa-loop/ledger.json` and a dedicated
+`regression-test-writer` agent turns every bug verified fixed into an
+**XCUITest** (Apple's built-in UI-testing framework: small Swift tests that
+launch the app, tap through it, and fail the build if the bug returns). It
+mines real `accessibilityIdentifier`s from your source for its element
+queries (and files a minor finding when key elements have none — that hurts
+accessibility too), drops the test into your UITest target only when the
+project format picks up new files automatically (it never hand-edits
+`project.pbxproj`; otherwise files land in `.qa-loop/regression-tests/` with
+a note to add them in Xcode), and starts every test with an `XCTSkip` so an
+unfinished test can never break CI — verify the selectors once, remove the
+skip, and the fix is guarded forever. Off by default because it writes into
+your repo's test suite.
 
 ## Usage
 

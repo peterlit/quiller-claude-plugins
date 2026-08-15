@@ -35,14 +35,6 @@ Constraints and rejected fixes:
   insult; it is the loop's guard against a fix that satisfies the finding
   and harms the product.
 
-Regression-test skeletons (only when the orchestrator asks — the
-emit_regression_tests setting): for each bug verified fixed this round,
-write an XCUITest skeleton — into the app's UITest target if one exists,
-else `.qa-loop/regression-tests/` — with the finding's repro steps as
-comments, best-effort element queries, and a leading
-`try XCTSkipIf(true, "verify selectors")` so an unfinished test can never
-break CI. These are starting points a human completes, not working tests.
-
 Boundaries:
 - Do NOT touch proposal-routed findings. Structural UX redesigns are the
   human's decision; do not implement them, and do not redesign flows as a side
