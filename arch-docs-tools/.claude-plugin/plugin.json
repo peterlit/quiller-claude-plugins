@@ -1,0 +1,16 @@
+{
+  "name": "arch-docs-tools",
+  "version": "0.1.0",
+  "description": "Evidence-grounded architecture documentation for any repo: surveys the codebase, splits into per-deliverable docs when warranted, and dispatches a documenter sub-agent per deliverable with scripted Mermaid and coverage validation.",
+  "author": {
+    "name": "Peter Litskevitch"
+  },
+  "keywords": [
+    "architecture",
+    "documentation",
+    "diagrams",
+    "mermaid",
+    "agents"
+  ],
+  "license": "MIT"
+}

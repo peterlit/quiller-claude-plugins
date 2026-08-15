@@ -11,6 +11,11 @@
       "name": "qa-loop-tools",
       "source": "./qa-loop-tools",
       "description": "Simulator-driven UX/QA convergence loop for iOS apps."
+    },
+    {
+      "name": "arch-docs-tools",
+      "source": "./arch-docs-tools",
+      "description": "Evidence-grounded architecture docs with automatic deliverable splitting."
     }
   ]
 }
