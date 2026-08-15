@@ -56,6 +56,13 @@ on different models, a partial guard against correlated blind spots.
 to, implementer/reviewer model diversity silently collapses — edit the reviewer's
 `model:` pin (in `agents/skeptical-reviewer.md`) to restore it.*
 
+## Every knob in one place
+
+[CONTROLS.md](CONTROLS.md) ships with the plugin: all settings, file-based
+controls, model pins, env vars, and playbook recipes for both loop plugins.
+In a session, ask `/review-loop-tools:controls` and Claude answers from the
+shipped reference.
+
 ## Token efficiency and hooks
 
 Findings JSON never transits the orchestrator: the reviewer writes its LEDGER

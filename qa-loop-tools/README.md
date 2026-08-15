@@ -166,6 +166,14 @@ unfinished test can never break CI — verify the selectors once, remove the
 skip, and the fix is guarded forever. Off by default because it writes into
 your repo's test suite.
 
+## Every knob in one place
+
+[CONTROLS.md](CONTROLS.md) ships with the plugin: all settings, file-based
+controls, model pins, env vars, and playbook recipes, each with an "in
+practice" line. In a session, ask `/qa-loop-tools:controls` and Claude
+answers from the shipped reference. (Plugin authors: the canonical copy
+lives at the repo root; the per-plugin copies are synced from it.)
+
 ## Usage
 
 ```

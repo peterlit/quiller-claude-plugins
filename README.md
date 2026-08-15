@@ -7,6 +7,11 @@ Plugins by Peter Litskevitch.
 | [review-loop-tools](review-loop-tools/) | Adversarial implementer/reviewer convergence loop over the *code*, with thrashing detection and an iteration backstop. |
 | [qa-loop-tools](qa-loop-tools/) | Simulator-driven UX/QA convergence loop over the *running iOS app*: persona-based testing with evidence-backed findings. |
 
+Operating either loop? [CONTROLS.md](CONTROLS.md) is the shared reference —
+every knob, where it lives, and how to use it in practice. It also ships
+inside each plugin and is available in-session via
+`/qa-loop-tools:controls` or `/review-loop-tools:controls`.
+
 ## Install
 
 ```
