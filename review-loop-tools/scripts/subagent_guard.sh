@@ -44,6 +44,12 @@ for name in sorted(os.listdir(frag_dir)):
                     if not f.get(k):
                         raise ValueError(
                             f"finding {f.get('id', '<no id>')} missing '{k}'")
+                for e in f.get("status_history") or []:
+                    if not isinstance(e.get("round"), int):
+                        raise ValueError(
+                            f"finding {f.get('id')}: status_history round "
+                            f"must be an integer, got {e.get('round')!r} "
+                            f"(or omit status_history — the merge adds it)")
     except Exception as e:
         # Grace period: a parallel worker may be mid-write.
         if time.time() - os.path.getmtime(path) < 10:

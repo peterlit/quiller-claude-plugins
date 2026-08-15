@@ -22,9 +22,10 @@ subagents. You are PLUMBING ONLY.
   and every merge goes through merge_ledger.py.
 - Maintain the phase marker `.qa-loop/.phase` (a Stop hook enforces it): write
   "round-<N>-testing" before dispatching testers, "round-<N>-implementing"
-  before dispatching the implementer, "awaiting-human" when stopping at the
-  Stage 1 gate, and "done" right after the final report. An ended turn while
-  the phase says "round…" is a stall.
+  before dispatching the implementer, "round-<N>-fix-review" before
+  dispatching the fix-reviewer, "awaiting-human" when stopping at the Stage 1
+  gate, and "done" right after the final report. An ended turn while the
+  phase says "round…" is a stall.
 - All loop state lives in the TARGET REPO at `.qa-loop/`. Never write it into
   the plugin directory. Suggest adding `.qa-loop/evidence/` to .gitignore.
 - While any tester dispatch is in flight, NOBODY touches a simulator — no
@@ -45,7 +46,7 @@ implementer dispatch for this round.
 
 ## Stage 1 — Workflows (once; the ONLY blocking human gate)
 1. If `.qa-loop/ledger.json` doesn't exist, create it with:
-   `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "findings": [] }`
+   `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "findings": [] }`
    (use the user's max_rounds and parallel_testers if they gave them; cap
    parallel_testers at 3 — each simulator wants 2-6GB of RAM). Also write
    `.qa-loop/.gitignore` containing exactly these three lines:
@@ -65,6 +66,12 @@ implementer dispatch for this round.
    review WORKFLOWS.md. When you stop, announce the loop settings so the human
    can adjust them at this natural touchpoint: "max_rounds=<M>,
    parallel_testers=<P> — reply 'use N testers' to parallelize test passes."
+   Include a rough cost estimate derived from the draft: assume ~2 test cases
+   per workflow per persona and roughly 2-4 minutes / 15-25K tokens per test
+   case (a real 40-case pass has run ~28 min / ~215K tokens), and state
+   "expect a full pass of ≈X-Y minutes / ≈Z tokens, up to <max_rounds>
+   rounds." After round 1 completes, re-announce the ACTUAL round-1 numbers
+   so the human can trim max_rounds with real data.
    When they respond, RE-READ the file (they may have edited it directly) and
    reconcile their feedback before proceeding. Do not start testing without
    this sign-off.
@@ -76,8 +83,10 @@ Write "round-0-testing" to `.qa-loop/.phase` (exploration counts as in-flight
 work for the stall guard). Dispatch `ux-tester` in EXPLORATION mode in CHUNKS — one dispatch per workflow,
 or batches of at most 3 workflows: each dispatch runs its workflows in both
 personas, APPENDS its test cases to `.qa-loop/TESTCASES.md`, and returns a
-one-line summary. Print a one-line progress update between dispatches
-("WF-4/12 explored, 2 candidate concerns"). Never send all workflows to a
+one-line summary. Every workflow labeled for both personas must get at least
+one novice AND one power-user test case — a workflow tested by a single
+persona must say so explicitly in WORKFLOWS.md. Print a one-line progress
+update between dispatches ("WF-4/12 explored, 2 candidate concerns"). Never send all workflows to a
 single dispatch — a monolithic pass runs silently for tens of minutes and can
 exhaust the tester's context with screenshots before it writes anything.
 In later rounds, refresh only the test cases for workflows whose screens
@@ -98,7 +107,9 @@ skew every metric downstream.
      cases).
    - Otherwise TARGETED: test cases whose workflows/screens are touched by the
      diff since the last build_sha, the repro steps of every open or
-     claimed-fixed finding, plus a small fixed smoke set.
+     claimed-fixed finding (skip fixes the fix review already rejected — they
+     are known bad and go back to the implementer instead), plus a small
+     fixed smoke set.
 4. Write "round-<N>-testing" to `.qa-loop/.phase` and run the FUNCTIONAL LANE.
    Every chunk dispatch carries: its slice of the test set, the path to the
    prior ledger.json, the harness notes `.qa-loop/HARNESS_NOTES.md` (create it
@@ -148,10 +159,34 @@ skew every metric downstream.
    It appends a row to `.qa-loop/rounds.md` and prints a JSON verdict with a
    `decision` field.
 8. Act on `decision`:
-   - `continue`: write "round-<N>-implementing" to `.qa-loop/.phase`, then
-     dispatch `qa-implementer` with the OPEN auto-routed findings, the
-     testers' summaries, and the evidence paths. Wait for its CHANGES block
-     and confirm it committed. Go to round N+1.
+   - `continue`:
+     a. INTENT CHECKS: if any finding's routing was flipped proposal->auto
+        since the last round (the human accepted a proposal), write
+        "round-<N>-fix-review" to `.qa-loop/.phase` and dispatch
+        `fix-reviewer` in INTENT CHECK mode covering all such findings
+        (fragment path `.qa-loop/fragments/round-<N>-intent.json`). Merge it.
+        The resulting constraints travel with those findings into every
+        later dispatch.
+     b. Write "round-<N>-implementing" to `.qa-loop/.phase`, then dispatch
+        `qa-implementer` with the OPEN auto-routed findings (including any
+        whose note says FIX REJECTED — the rejection reason is part of its
+        brief), their fix_risk flags and constraints, the testers' summaries,
+        and the evidence paths. If emit_regression_tests is true, ask it to
+        emit XCUITest regression skeletons for bugs verified fixed this
+        round. Wait for its CHANGES block and confirm it committed.
+     c. FIX REVIEW: write "round-<N>-fix-review" to `.qa-loop/.phase` and
+        dispatch `fix-reviewer` in FIX REVIEW mode with: the sha range of the
+        implementer's commits this round, the CHANGES block (labeled as
+        claims), the findings it claims to address (with fix_risk and
+        constraints), and the fragment path
+        `.qa-loop/fragments/round-<N>-fixreview.json`. Merge its fragment.
+     d. If the fix review judged any fix unsound or harmful, FLAG IT TO THE
+        HUMAN immediately and prominently — print one warning line per
+        rejection in your progress output: "FIX REJECTED: <finding-id> —
+        <reason>". Rejected findings stay open with the rejection reason in
+        their note and return to the implementer next round; harmful fixes
+        also minted an introduced_by_fix finding.
+     e. Go to round N+1.
    - `full_pass_required`: go to round N+1 with a FULL pass and NO implementer
      dispatch (nothing to fix — you are confirming convergence on this build).
    - anything else: stop and write the final report.
@@ -181,17 +216,27 @@ Write `.qa-loop/REPORT.md`:
 - Disputed items (agree-to-disagree), with both sides' arguments.
 - UX PROPOSALS: every proposal-routed finding — the evidence, the cost to the
   user, and a sketch of the proposed fix. The human decides; to accept one,
-  flip its routing to "auto" and re-run the loop.
+  flip its routing to "auto" and re-run the loop (acceptance triggers a
+  design-intent check before implementation — accepted behavior changes get
+  MORE scrutiny, not less).
+- FIX REVIEW REJECTIONS: every fix judged unsound or harmful across the loop,
+  with the reviewer's reason and the finding's current state — these need
+  human eyes even if later resolved.
+- PERSONA MATRIX: a workflow × persona table built from coverage.json
+  (personas recorded per test-case result), so a workflow labeled "both" but
+  exercised by one persona shows as a visible hole, not an implicit claim.
 - COVERAGE GAPS: every test case whose latest status is blocked or skipped,
   with its reason. (Example: device rotation is not scriptable in some
   environments and there is no simctl rotation command — if the app offers a
   launch argument to force orientation use that, otherwise the case stays
   here as a documented gap rather than silently dropped.)
 - Material WORKFLOWS.md edits made during the loop, if any.
-- WATCH LIST: the 3-5 most invasive fixes across all rounds plus every
-  proposal, each with its commit and a one-line "look here because…". This is
-  the part a human should actually read, because the loop cannot catch two
-  same-family agents agreeing on a fix that is wrong for real users.
+- WATCH LIST: the 3-5 most invasive fixes across all rounds, every proposal,
+  every finding carrying fix_risk (listed for that reason — its obvious fix
+  was a trap), and every fix-review rejection — each with its commit and a
+  one-line "look here because…". This is the part a human should actually
+  read: the fix-reviewer decorrelates the loop's blind spots but cannot
+  eliminate them.
 Print a one-line verdict and the path to the report, and set
 `.qa-loop/.phase` to "done". If worker simulators exist, tear them down:
 `${CLAUDE_PLUGIN_ROOT}/scripts/provision_workers.sh down`
@@ -218,13 +263,18 @@ LEDGER fragment (`.qa-loop/fragments/round-<N>-<slug>.json`):
                 "measurements": { "taps": 9, "expected_taps": 3 } },
   "first_seen_round": 1, "introduced_by_fix": false,
   "status_history": [{ "round": 1, "status": "open" }],
-  "current_status": "open", "note": ""
+  "current_status": "open", "note": "",
+  "fix_risk": "metric-integrity | incentive | behavior-change | state-migration (OPTIONAL — set when the obvious fix is a trap)",
+  "constraints": ["OPTIONAL — written by the fix-reviewer's intent check on accepted proposals"]
 } ] }
 ```
+Fragments MAY omit status_history entirely — merge_ledger.py appends this
+round's entry from current_status. When status_history is included, every
+"round" value must be an integer (annotations go in "note").
 Results fragment (`.qa-loop/fragments/round-<N>-<slug>.results.json`):
 ```json
-{ "results": [ { "tc": "TC-2.1", "status": "passed|failed|blocked|skipped",
-                 "reason": "" } ] }
+{ "results": [ { "tc": "TC-2.1", "persona": "novice|power",
+                 "status": "passed|failed|blocked|skipped", "reason": "" } ] }
 ```
 Every assigned test case must appear exactly once; "blocked" means the
 environment prevented the test and requires a reason.

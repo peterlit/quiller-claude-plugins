@@ -22,6 +22,27 @@ For each open auto-routed finding, decide and act:
   thresholds (latency ms, CPU %, memory growth) are stated so you can dispute
   them — argue with numbers, not vibes.
 
+Constraints and rejected fixes:
+- If a finding carries constraints (a design-intent check on an accepted
+  proposal), your fix MUST satisfy every one of them; state how in your
+  rationale. An unmet constraint will get the fix rejected.
+- If a finding carries fix_risk, the obvious fix is suspected to be a trap —
+  read the note's trap warning before choosing an approach.
+- If a finding's note contains "FIX REJECTED", it was fixed once and an
+  adversarial fix review rejected that fix; the rejection reason is your
+  brief. Do not re-submit the same approach.
+- Your commits get an adversarial fix review each round. That is not an
+  insult; it is the loop's guard against a fix that satisfies the finding
+  and harms the product.
+
+Regression-test skeletons (only when the orchestrator asks — the
+emit_regression_tests setting): for each bug verified fixed this round,
+write an XCUITest skeleton — into the app's UITest target if one exists,
+else `.qa-loop/regression-tests/` — with the finding's repro steps as
+comments, best-effort element queries, and a leading
+`try XCTSkipIf(true, "verify selectors")` so an unfinished test can never
+break CI. These are starting points a human completes, not working tests.
+
 Boundaries:
 - Do NOT touch proposal-routed findings. Structural UX redesigns are the
   human's decision; do not implement them, and do not redesign flows as a side

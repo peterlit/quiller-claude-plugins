@@ -11,7 +11,7 @@ machinery, but the reviewer reads the *running app*, not the code.
 
 ## How it works
 
-Three roles:
+Four roles:
 
 1. **Orchestrator (main agent)** — pure plumbing. Builds/installs/launches the
    app, resets it to a deterministic state each round, runs the NFR sampler and
@@ -25,6 +25,19 @@ Three roles:
 3. **`qa-implementer` subagent** — fixes auto-routed findings, disputes false
    positives with numbers, builds, and commits. It never opens the simulator;
    the tester re-verifies every claimed fix with fresh eyes the next round.
+4. **`fix-reviewer` subagent** — the loop's defense against its own biggest
+   blind spot: two agents agreeing on a fix that is faithful to the finding
+   and still wrong for the product (the canonical trap: "clock runs during
+   sheets" fixed by pausing the clock — now any sheet is a pause button and
+   best-times are gameable). Once per round it adversarially reviews the
+   implementer's diff — scored metrics, incentives, persisted state, declared
+   constraints — and rejects unsound fixes back to open (each rejection is
+   flagged to you immediately and collected in the report's FIX REVIEW
+   REJECTIONS section). It also runs a **design-intent check** whenever you
+   accept a proposal: accepted behavior changes get *more* scrutiny, not
+   less — the check emits constraints the implementation must satisfy.
+   Findings whose *obvious fix is a trap* carry a `fix_risk` flag and land on
+   the WATCH LIST for that reason.
 
 ## Stages
 
@@ -127,13 +140,26 @@ restarting the round free.
 ## Model configuration
 
 The **implementer** uses `model: inherit` — it runs on whatever model you
-select for your main session (via `/model`). The **tester** is pinned to a
-fixed model in its frontmatter (`agents/ux-tester.md`) so the two agents run on
-different models, a partial guard against correlated blind spots.
+select for your main session (via `/model`). The **tester** and the
+**fix-reviewer** are pinned to two *different* fixed models in their
+frontmatter (`agents/ux-tester.md`, `agents/fix-reviewer.md`), so the three
+seats run on three distinct models — a partial guard against correlated blind
+spots. If you change any pin, keep all three distinct.
 
 *If you run your main session on the same model the tester is pinned to,
 tester/implementer model diversity silently collapses — edit the tester's
 `model:` pin (in `agents/ux-tester.md`) to restore it.*
+
+## Optional: regression-test skeletons
+
+Set `"emit_regression_tests": true` in `.qa-loop/ledger.json` and, for every
+bug verified fixed, the implementer emits an **XCUITest skeleton** (Apple's
+built-in UI-testing framework: small Swift tests that launch the app, tap
+through it, and fail the build if the bug returns). Skeletons carry the repro
+steps as comments and best-effort element queries, and start with an
+`XCTSkip` so an unfinished test can never break CI — you verify the element
+selectors once, remove the skip, and the fix is guarded forever. Off by
+default because it writes into your app's UITest target.
 
 ## Usage
 

@@ -40,6 +40,8 @@ def main():
         if not tc or status not in VALID:
             die(f"bad result entry {r!r} (need tc + status in {sorted(VALID)})")
         bucket[tc] = {"status": status, "reason": r.get("reason", "")}
+        if r.get("persona"):
+            bucket[tc]["persona"] = r["persona"]
     with open(cov_path, "w") as fh:
         json.dump(cov, fh, indent=2)
         fh.write("\n")

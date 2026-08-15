@@ -98,7 +98,16 @@ def main():
         a = regions_new_or_reopened(findings, N)
         b = regions_new_or_reopened(findings, N - 1)
         c = regions_new_or_reopened(findings, N - 2)
-        region_thrash = bool(a & b & c)
+        if a & b & c:
+            # Healthy-churn exception: a region that keeps yielding NEW,
+            # net-positive, non-reopening findings is convergent residue
+            # (each fix exposing a smaller issue), not oscillation. Judged
+            # on the last two rounds — round 1 is the seed and always net-
+            # negative. Reopens or non-positive net still count as thrashing.
+            healthy = all(
+                net_for(findings, r)[3] > 0 and net_for(findings, r)[2] == 0
+                for r in (N, N - 1))
+            region_thrash = not healthy
     any_reopened_twice = any(reopen_count(f) >= 2 for f in findings)
 
     # decision, in priority order
