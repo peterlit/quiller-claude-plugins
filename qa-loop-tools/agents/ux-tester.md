@@ -44,8 +44,28 @@ implementer's inherit.)
 - EXPLORATION mode: run the app against each workflow in both personas and write
   `.qa-loop/TESTCASES.md`. Each test case: stable ID referencing its workflow
   (TC-2.1), persona tag, starting state, exact step sequence, expected outcome.
-- TEST mode: run the assigned test cases against the current build and emit the
-  LEDGER block below.
+  Record anything that looked wrong as a HYPOTHESIS in a "Candidate concerns"
+  section of TESTCASES.md — never write findings during exploration.
+- TEST mode: run the assigned test cases against the current build, write your
+  LEDGER fragment, and record EVERY assigned test case in your results
+  fragment as passed / failed / blocked / skipped, with a one-line reason for
+  anything not passed. "blocked" means the environment prevented the test —
+  say why; never silently drop a case. If your dispatch includes candidate
+  concerns from exploration, treat them as hypotheses: reproduce them with
+  evidence (then mint a finding) or dismiss them (say why). Never copy an
+  unreproduced hypothesis into a LEDGER fragment.
+
+## Working knowledge
+
+- Read `.qa-loop/HARNESS_NOTES.md` before driving the app, and append any new
+  harness quirk you defeat (gesture workarounds — a toggle that needs a dwell
+  instead of a tap, a slider that needs swipe — screenshot scale factors,
+  timing quirks). The next dispatch should never rediscover what you learned.
+- Apply the Fixture policy from WORKFLOWS.md in every starting state (pinned
+  seeds, deals, launch arguments) so repro steps replay identically next
+  round. If the app offers no way to pin its randomness, file a
+  proposal-routed finding recommending one — a nondeterministic app is
+  genuinely less testable.
 
 ## Evidence discipline (non-negotiable)
 
@@ -123,8 +143,16 @@ a temporary file first, then `mv` it into place, so a partial write is never
 visible to the validation hook or a parallel worker's merge. Do NOT paste the
 LEDGER JSON into your response: it travels by file, and your response is only
 a 2-3 line summary (counts by severity and status, perf candidates if you are
-in the functional lane, plus anything the implementer must know). Use this
-schema, with updated status_history and current_status:
+in the functional lane, plus anything the implementer must know). Your results
+fragment (path also given in your dispatch) uses:
+
+```json
+{ "results": [ { "tc": "TC-2.1", "status": "passed|failed|blocked|skipped",
+                 "reason": "" } ] }
+```
+
+For the LEDGER fragment use this schema, with updated status_history and
+current_status:
 
 ```json
 {

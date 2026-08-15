@@ -39,7 +39,11 @@ Three roles:
 - **Rounds**: test pass → evidence-backed findings ledger → metrics verdict →
   implementer fixes → re-test. Full pass on round 1; later rounds run a
   targeted set (changed areas + open-finding repros + smoke set). The loop can
-  only declare CONVERGED after confirming on a full pass.
+  only declare CONVERGED after confirming on a full pass whose **coverage
+  manifest** (`coverage.json`, built from per-test-case results every tester
+  chunk must report) accounts for every case in TESTCASES.md — a full pass is
+  verified, not claimed. Blocked/skipped cases surface in the report's
+  COVERAGE GAPS section with reasons.
 
 Stop conditions (converged / thrashing / stalemate / diminishing / backstop)
 mirror review-loop-tools, with thrashing regions defined as workflows/screens.
@@ -59,9 +63,13 @@ Every finding is typed and routed:
 ## What the loop can honestly measure
 
 Simulator apps run as native macOS processes, so the bundled
-`scripts/nfr_sampler.sh` samples the app's real PID from the host: resident
-memory over time (leak detection via repeated-action loops), CPU (sustained
-burn), and network bytes via `nettop` — no proxy or Instruments setup. Two
+`scripts/nfr_sampler.sh` samples the app from the host: resident memory over
+time (leak detection via repeated-action loops), CPU (sustained burn), and
+network bytes via `nettop` — no proxy or Instruments setup. It tracks the app
+by simulator UDID + bundle id, re-resolving the PID each tick, so it follows
+the app across relaunches instead of dying with a PID; every sample carries
+the pid so analysis can separate stints and never misreads a relaunch as a
+memory drop. Two
 honest limits, reflected in how findings are worded:
 
 - **Battery is not measurable in a simulator.** The loop reports *sustained
@@ -96,10 +104,17 @@ commit guard as review-loop-tools (`REVIEW_LOOP_MAX_DIFF`,
 ## Loop state
 
 Everything lives in the **target repository** under `.qa-loop/`:
-`WORKFLOWS.md` (your approved contract), `TESTCASES.md` (derived),
-`ledger.json`, `rounds.md`, `REPORT.md`, and `evidence/round-N/` (screenshots +
-`samples.jsonl`). Nothing is stored in the plugin directory. Add
-`.qa-loop/evidence/` to `.gitignore` — screenshots bloat repos.
+`WORKFLOWS.md` (your approved contract, including the Fixture policy that pins
+the app's randomness), `TESTCASES.md` (derived; also holds exploration's
+Candidate concerns as hypotheses), `HARNESS_NOTES.md` (simulator interaction
+quirks the testers discover, so they're learned once, not per round),
+`ledger.json`, `rounds.md`, `coverage.json`, `REPORT.md`, and
+`evidence/round-N/` (screenshots + `samples.jsonl`). Nothing is stored in the
+plugin directory. The loop writes its own `.qa-loop/.gitignore` covering
+`evidence/`, `fragments/`, and `.phase`; everything else is meant to be
+committed. Interrupting a round is always safe — durable state is the ledger,
+merged fragments, coverage, and docs, and the deterministic reset makes
+restarting the round free.
 
 ## Requirements
 

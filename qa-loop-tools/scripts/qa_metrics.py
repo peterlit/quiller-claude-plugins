@@ -6,10 +6,31 @@ Appends a row to <ledger-dir>/rounds.md and prints a JSON verdict on stdout.
 
 Proposal-routed findings (routing == "proposal") are excluded from all metrics:
 they are human decisions and must not block or distort convergence.
+
+On a full pass, coverage is verified against <ledger-dir>/coverage.json and the
+TC ids found in <ledger-dir>/TESTCASES.md: a "converged" verdict degrades to
+"full_pass_required" if any test case was not run (or no manifest was written).
+"blocked" counts as accounted-for but is reported for the COVERAGE GAPS section.
 """
-import json, sys, os
+import json, os, re, sys
 
 OPENISH = {"open", "partial"}
+
+def die(msg):
+    print(f"qa_metrics: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def validate(findings):
+    for f in findings:
+        fid = f.get("id", "<missing id>")
+        fsr = f.get("first_seen_round", 1)
+        if not isinstance(fsr, int):
+            die(f"finding {fid}: first_seen_round must be an integer, got {fsr!r}")
+        for e in f.get("status_history", []):
+            r = e.get("round")
+            if not isinstance(r, int):
+                die(f"finding {fid}: status_history round must be an integer, "
+                    f"got {r!r} — annotations belong in 'note', not 'round'")
 
 def status_at(f, r):
     """Status of finding f at the end of round r, or None if not yet seen."""
@@ -54,12 +75,41 @@ def open_count(findings, r, severity):
 def disputed_set(findings, r):
     return frozenset(f["id"] for f in findings if status_at(f, r) == "disputed")
 
+def check_coverage(base_dir, N):
+    """Returns (coverage-dict-or-None, missing, manifest_exists)."""
+    tc_path = os.path.join(base_dir, "TESTCASES.md")
+    cov_path = os.path.join(base_dir, "coverage.json")
+    if not os.path.exists(tc_path):
+        return None, [], True
+    with open(tc_path) as fh:
+        tc_ids = sorted(set(re.findall(r"\bTC-\d+(?:\.\d+)?\b", fh.read())))
+    round_cov = {}
+    manifest_exists = os.path.exists(cov_path)
+    if manifest_exists:
+        with open(cov_path) as fh:
+            round_cov = json.load(fh).get("rounds", {}).get(str(N), {})
+    missing = [t for t in tc_ids if t not in round_cov]
+    blocked = [t for t in sorted(round_cov)
+               if round_cov[t].get("status") == "blocked"]
+    coverage = {"ran": len(tc_ids) - len(missing), "total": len(tc_ids),
+                "missing": missing, "blocked": blocked}
+    return coverage, missing, manifest_exists
+
 def main():
-    path, N = sys.argv[1], int(sys.argv[2])
+    if len(sys.argv) < 3:
+        die("usage: qa_metrics.py <ledger.json> <round> [full|targeted]")
+    path = sys.argv[1]
+    try:
+        N = int(sys.argv[2])
+    except ValueError:
+        die(f"round must be an integer, got '{sys.argv[2]}'")
     pass_type = sys.argv[3] if len(sys.argv) > 3 else "full"
+    if pass_type not in ("full", "targeted"):
+        die(f"pass type must be 'full' or 'targeted', got '{pass_type}'")
     with open(path) as fh:
         ledger = json.load(fh)
     all_findings = ledger.get("findings", [])
+    validate(all_findings)
     findings = [f for f in all_findings if f.get("routing", "auto") != "proposal"]
     proposals_open = sum(1 for f in all_findings
                          if f.get("routing") == "proposal"
@@ -103,12 +153,29 @@ def main():
     else:
         decision, reason = "continue", "progress continuing"
 
+    # coverage gate: a full pass must account for every test case
+    coverage = None
+    if pass_type == "full":
+        base_dir = os.path.dirname(os.path.abspath(path))
+        coverage, missing, manifest_exists = check_coverage(base_dir, N)
+        if decision == "converged" and coverage is not None:
+            if not manifest_exists:
+                decision = "full_pass_required"
+                reason = "full pass claimed but no coverage manifest (coverage.json) was written"
+            elif missing:
+                decision = "full_pass_required"
+                reason = (f"full pass claimed but {len(missing)} test case(s) "
+                          f"unrun: {', '.join(missing[:5])}"
+                          + ("…" if len(missing) > 5 else ""))
+
     verdict = {
         "round": N, "pass_type": pass_type, "blockers_open": blockers_open,
         "majors_open": majors_open, "minors_open": minors_open,
         "proposals_open": proposals_open, "closed": closed, "new": new,
         "reopened": reopened, "net": net, "decision": decision, "reason": reason,
     }
+    if coverage is not None:
+        verdict["coverage"] = coverage
 
     rounds_md = os.path.join(os.path.dirname(os.path.abspath(path)), "rounds.md")
     header = "| Round | Pass | Blockers | Majors | Minors | Proposals | Closed | New | Reopened | Net | Decision |\n"

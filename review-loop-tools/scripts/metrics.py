@@ -8,6 +8,22 @@ import json, sys, os
 
 OPENISH = {"open", "partial"}
 
+def die(msg):
+    print(f"metrics: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def validate(findings):
+    for f in findings:
+        fid = f.get("id", "<missing id>")
+        fsr = f.get("first_seen_round", 1)
+        if not isinstance(fsr, int):
+            die(f"finding {fid}: first_seen_round must be an integer, got {fsr!r}")
+        for e in f.get("status_history", []):
+            r = e.get("round")
+            if not isinstance(r, int):
+                die(f"finding {fid}: status_history round must be an integer, "
+                    f"got {r!r} — annotations belong in 'note', not 'round'")
+
 def status_at(f, r):
     """Status of finding f at the end of round r, or None if not yet seen."""
     if f.get("first_seen_round", 1) > r:
@@ -52,10 +68,17 @@ def disputed_set(findings, r):
     return frozenset(f["id"] for f in findings if status_at(f, r) == "disputed")
 
 def main():
-    path, N = sys.argv[1], int(sys.argv[2])
+    if len(sys.argv) < 3:
+        die("usage: metrics.py <ledger.json> <round>")
+    path = sys.argv[1]
+    try:
+        N = int(sys.argv[2])
+    except ValueError:
+        die(f"round must be an integer, got '{sys.argv[2]}'")
     with open(path) as fh:
         ledger = json.load(fh)
     findings = ledger.get("findings", [])
+    validate(findings)
     max_rounds = ledger.get("max_rounds", 5)
 
     closed, new, reopened, net = net_for(findings, N)
