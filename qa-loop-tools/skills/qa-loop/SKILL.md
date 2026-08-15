@@ -18,8 +18,17 @@ subagents. You are PLUMBING ONLY.
   round's build_sha (the tester runs `git diff` on it itself — you never paste
   or summarize the diff) + the implementer's CHANGES block, labeled as the
   implementer's unverified claims.
-- You NEVER hand-edit ledger.json. Testers write LEDGER fragments to files,
-  and every merge goes through merge_ledger.py.
+- You NEVER hand-edit ledger.json's findings array. Testers write LEDGER
+  fragments to files and every merge goes through merge_ledger.py; human and
+  orchestrator decisions (e.g. "wontfix — the human already declined this
+  proposal") are recorded with the resolve verb:
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py resolve .qa-loop/ledger.json <id> <status> <round> "<note>"`
+  Top-level loop metadata (round, build_sha, implemented_rounds, settings)
+  is yours to maintain directly.
+- `.qa-loop/fragments/` is EXCLUSIVELY for subagent-written schema files,
+  and no agent may modify a fragment it did not write. Anything YOU compose
+  for a dispatch — open-findings extracts, briefs — goes in
+  `.qa-loop/briefs/`.
 - Maintain the phase marker `.qa-loop/.phase` (a Stop hook enforces it): write
   "round-<N>-testing" before dispatching testers, "round-<N>-implementing"
   before dispatching the implementer, "round-<N>-fix-review" before
@@ -45,16 +54,32 @@ simulator, launch it, take one smoke screenshot. If any step fails, record an
 automatic blocker finding (type "bug", routing "auto") and skip straight to the
 implementer dispatch for this round.
 
+Also verify the iOS Simulator control tools
+(`mcp__Claude_Code_iOS_Simulator__*`) actually reach subagents in this
+session. If they do NOT, warn the human BEFORE proceeding: without them,
+testers must drive the app through XCUITest drivers they build themselves,
+which multiplies token cost several-fold. If the human proceeds anyway, the
+driver is built ONCE — in `.qa-loop/driver/` — and every tester dispatch
+points at it, with its usage documented in HARNESS_NOTES.md. Never let each
+tester rebuild a driver from scratch.
+
 ## Stage 1 — Workflows (once; the ONLY blocking human gate)
 1. If `.qa-loop/ledger.json` doesn't exist, create it with:
-   `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "findings": [] }`
+   `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "implemented_rounds": [], "findings": [] }`
    (use the user's max_rounds and parallel_testers if they gave them; cap
    parallel_testers at 3 — each simulator wants 2-6GB of RAM). Also write
    `.qa-loop/.gitignore` containing exactly these three lines:
    `evidence/`, `fragments/`, `.phase` — everything else in `.qa-loop/`
    (WORKFLOWS.md, TESTCASES.md, HARNESS_NOTES.md, ledger.json, rounds.md,
    coverage.json, REPORT.md) is meant to be committed.
-2. If `.qa-loop/WORKFLOWS.md` doesn't exist: read the code, docs, and app
+2. If `.qa-loop/WORKFLOWS.md` already exists, its existence is NOT standing
+   sign-off for stale facts. Check whether the app changed since the doc's
+   last commit (`git log -1 --format=%ct -- .qa-loop/WORKFLOWS.md` vs the
+   app source's latest change). If it did, re-verify the Fixture policy
+   values (pinned deals, seeds, launch arguments) and any environment claims
+   (e.g. what is and isn't drivable) against the CURRENT build; update
+   what's stale and flag the edits in the report.
+   If `.qa-loop/WORKFLOWS.md` doesn't exist: read the code, docs, and app
    metadata, then draft it with: persona definitions (novice = discoverability;
    power user = efficiency and rare-but-legit complex tasks), workflows with
    stable IDs (WF-1, WF-2, …), each workflow's reasonable-effort expectation
@@ -181,8 +206,10 @@ skew every metric downstream.
         `qa-implementer` with the OPEN auto-routed findings (including any
         whose note says FIX REJECTED — the rejection reason is part of its
         brief), their fix_risk flags and constraints, the testers' summaries,
-        and the evidence paths. Wait for its CHANGES block and confirm it
-        committed.
+        and the evidence paths. Wait for its CHANGES block, confirm it
+        committed, then append N to ledger.json's top-level
+        implemented_rounds array — the metrics use it to tell
+        post-implementation rounds from discovery rounds.
      c. FIX REVIEW: write "round-<N>-fix-review" to `.qa-loop/.phase` and
         dispatch `fix-reviewer` in FIX REVIEW mode with: the sha range of the
         implementer's commits this round, the CHANGES block (labeled as
@@ -198,6 +225,9 @@ skew every metric downstream.
      e. Go to round N+1.
    - `full_pass_required`: go to round N+1 with a FULL pass and NO implementer
      dispatch (nothing to fix — you are confirming convergence on this build).
+   - `thrashing_soft`: write "awaiting-human" to `.qa-loop/.phase`, STOP, and
+     ask the human: abort with the report, or run one more round? (Approved
+     continuation: one more round; a second thrashing signal then is hard.)
    - anything else: stop and write the final report.
 
 ## Stop conditions (computed by qa_metrics.py, evaluated in this order)
@@ -206,10 +236,17 @@ skew every metric downstream.
   every test case in TESTCASES.md (qa_metrics.py verifies this; unrun cases or
   a missing manifest degrade the verdict to `full_pass_required`). When the
   signals are present on a targeted pass, the verdict is `full_pass_required`.
-- THRASHING (abort, escalate): any finding reopened >= 2 times, OR net <= 0 for
-  two consecutive rounds, OR the same region recurs in new/reopened findings
-  for three consecutive rounds. Regions are workflows/screens, so this catches
-  "the loop keeps churning the checkout screen."
+- THRASHING (abort, escalate): any finding reopened >= 2 times (fixed->open;
+  fixed->partial is refinement and does not count), OR net <= 0 for two
+  consecutive POST-IMPLEMENTATION rounds (discovery rounds are inherently
+  net-negative and never count — that is what implemented_rounds gates), OR
+  the same region recurs in new/reopened findings for three consecutive
+  rounds. Regions are workflows/screens, so this catches "the loop keeps
+  churning the checkout screen."
+- THRASHING_SOFT: the same signals but with 0 open blockers AND positive
+  closes this round. -> STOP and ask the human: abort with the report, or
+  run one more round? A second thrashing signal after an approved
+  continuation is hard — do not re-ask.
 - STALEMATE: identical `disputed` set for two consecutive rounds.
 - DIMINISHING: net <= 1 for two consecutive rounds AND 0 open blockers.
 - BACKSTOP: N == max_rounds. Hard stop regardless of state.
@@ -263,6 +300,7 @@ LEDGER fragment (`.qa-loop/fragments/round-<N>-<slug>.json`):
 ```json
 { "findings": [ {
   "id": "ux/WF-2:checkout-tap-count",
+  "claim": "REQUIRED on new findings: what is wrong and its concrete failure mode, 1-2 sentences — the ledger must stand alone as the implementer's brief",
   "type": "bug | ux-design", "routing": "auto | proposal",
   "severity": "blocker | major | minor",
   "confidence": "confirmed | suspected",

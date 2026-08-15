@@ -1,15 +1,63 @@
 #!/usr/bin/env python3
 """Deterministically merge a round's LEDGER fragment into the loop ledger.
 
-Usage: merge_ledger.py <ledger.json> <fragment.json> <round-number>
+Usage:
+  merge_ledger.py <ledger.json> <fragment.json> <round-number>
+  merge_ledger.py resolve <ledger.json> <finding-id> <status> <round> [note]
 
-The fragment is {"findings": [...]}. Existing findings are updated (scalar
-fields overwritten, evidence lists unioned, status_history appended for this
-round); unknown findings are added with first_seen_round defaulting to this
-round. Findings absent from the fragment are left untouched (targeted passes
-do not re-report everything). Prints a terse JSON summary on stdout.
+Merge mode: the fragment is {"findings": [...]}. Existing findings are
+updated (scalar fields overwritten, evidence lists unioned, status_history
+appended for this round); unknown findings are added with first_seen_round
+defaulting to this round. Findings absent from the fragment are left
+untouched. Prints a terse JSON summary on stdout.
+
+Resolve mode: records a human/orchestrator decision on one finding — e.g.
+wontfix for a proposal the human already declined — appending to
+status_history and stamping the note, so decided issues never need
+hand-editing and never linger open.
 """
 import json, sys
+
+VALID_STATUS = {"open", "partial", "fixed", "wontfix", "disputed"}
+
+def resolve(args):
+    if len(args) < 4:
+        print("usage: merge_ledger.py resolve <ledger.json> <finding-id> "
+              "<open|partial|fixed|wontfix|disputed> <round> [note]",
+              file=sys.stderr)
+        sys.exit(2)
+    path, fid, status = args[0], args[1], args[2]
+    if status not in VALID_STATUS:
+        print(f"merge_ledger: invalid status '{status}' "
+              f"(want one of {sorted(VALID_STATUS)})", file=sys.stderr)
+        sys.exit(1)
+    try:
+        rnd = int(args[3])
+    except ValueError:
+        print(f"merge_ledger: round must be an integer, got '{args[3]}'",
+              file=sys.stderr)
+        sys.exit(1)
+    note = args[4] if len(args) > 4 else ""
+    with open(path) as fh:
+        ledger = json.load(fh)
+    for f in ledger.get("findings", []):
+        if f.get("id") == fid:
+            hist = f.setdefault("status_history", [])
+            if not any(e.get("round") == rnd and e.get("status") == status
+                       for e in hist):
+                hist.append({"round": rnd, "status": status})
+            f["current_status"] = status
+            if note:
+                prev = (f.get("note") or "").strip()
+                stamp = f"RESOLVED (round {rnd}): {note}"
+                f["note"] = f"{prev} | {stamp}" if prev else stamp
+            with open(path, "w") as out:
+                json.dump(ledger, out, indent=2)
+                out.write("\n")
+            print(json.dumps({"id": fid, "status": status, "round": rnd}))
+            return
+    print(f"merge_ledger: no finding with id '{fid}'", file=sys.stderr)
+    sys.exit(1)
 
 def union_evidence(old, new):
     if not isinstance(old, dict):
@@ -25,6 +73,9 @@ def union_evidence(old, new):
     return out
 
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "resolve":
+        resolve(sys.argv[2:])
+        return
     ledger_path, frag_path, rnd = sys.argv[1], sys.argv[2], int(sys.argv[3])
     with open(ledger_path) as fh:
         ledger = json.load(fh)

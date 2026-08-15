@@ -74,14 +74,22 @@ Write your LEDGER to the fragment file path given in your dispatch — write to
 a temporary file first, then `mv` it into place, so a partial write is never
 visible. Do NOT paste the LEDGER JSON into your response: it travels by file,
 and your response is only a 2-3 line summary (counts by severity and status,
-plus anything the implementer must know next round). Use this schema, with
-updated status_history and current_status:
+plus anything the implementer must know next round).
+
+The ledger is the implementer's ENTIRE brief — your prose does not travel.
+Every NEW finding must therefore carry `claim` (what is wrong and its
+concrete failure mode, 1-2 sentences) and `evidence` (file:line references).
+`note` is for status annotations, not the finding's substance. Never modify
+a fragment file you did not write. Use this schema, with updated
+status_history and current_status:
 
 ```json
 {
   "findings": [
     {
       "id": "concurrency/ImageLoader.swift:main-thread-block",
+      "claim": "Image decoding runs on the main actor; on a slow network the UI freezes for the full download.",
+      "evidence": ["ImageLoader.swift:44", "ImageLoader.swift:61"],
       "severity": "blocker",
       "region": "ImageLoader.swift:40-70",
       "first_seen_round": 1,

@@ -14,10 +14,12 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   *In practice:* "run the qa loop, max 3 rounds, use 2 testers" sets all
   three knobs in one line — the skill reads them into ledger.json.
 - **`/review-loop-tools:review-loop`** `[review]` — starts the adversarial
-  code-review loop. If a `REVIEW.md` exists at the repo root, it becomes the
-  seed findings instead of a cold review.
-  *In practice:* paste a human review (or another tool's output) into
-  `REVIEW.md` first to make the loop grind through *your* list.
+  code-review loop. Three seed modes: name a **scope** (a sha range, diff
+  file, or PR) to review just that change; a `REVIEW.md` at the repo root
+  becomes the seed findings; otherwise a cold full review of HEAD.
+  *In practice:* "review-loop the changes in main..feature-x" scopes the
+  whole loop to one change; paste a human review into `REVIEW.md` to make
+  the loop grind through *your* list.
 - **`/model`** `[both]` — your main-session model *is* the implementer's
   model (and the orchestrator's): both implementers use `model: inherit`.
   *In practice:* strongest model for real hardening; a Sonnet session for a
@@ -62,6 +64,12 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   implementation must satisfy.
   *In practice:* the only ledger surgery you should ever do by hand;
   everything else merges through scripts.
+- **`merge_ledger.py resolve`** `[both]` — records a decision on one finding
+  without hand-editing: `resolve <ledger> <id> <status> <round> "<note>"`.
+  *In practice:* the way to close a finding you've already decided against
+  ("wontfix — declined in 2796867") so testers stop re-filing it; resolved
+  and wontfixed findings travel with every dispatch precisely so agents
+  don't re-litigate them.
 - **`HARNESS_NOTES.md`** `[qa]` — simulator interaction quirks the testers
   learn (dwell-tap toggles, swipe-only sliders, screenshot scale factors),
   carried into every dispatch.
@@ -119,6 +127,13 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   next round with the rejection as its brief.
   *In practice:* read these when they appear — a rejection often means the
   *finding* was a trap and belongs in proposals for a human decision.
+- **`thrashing_soft`** `[both]` — thrashing signals with mitigating progress
+  (0 open blockers, positive closes) now pause and ask you — abort with the
+  report, or one more round? — instead of hard-aborting. A second thrashing
+  signal after you approve a continuation is final.
+  *In practice:* say "one more round" when the open findings are cheap and
+  the trend is genuinely converging; take the abort when findings are
+  reopening.
 - **Interrupting** `[qa]` — killing a round is always safe. Durable state:
   ledger, merged fragments, coverage, docs. Resume restarts the round from
   its deterministic reset.

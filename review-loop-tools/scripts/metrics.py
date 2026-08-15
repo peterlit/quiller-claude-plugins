@@ -39,15 +39,18 @@ def regions_new_or_reopened(findings, r):
     for f in findings:
         if f.get("first_seen_round") == r:
             out.add(f.get("region", f.get("id")))
-        elif status_at(f, r - 1) == "fixed" and status_at(f, r) in OPENISH:
+        elif status_at(f, r - 1) == "fixed" and status_at(f, r) == "open":
             out.add(f.get("region", f.get("id")))
     return out
 
 def reopen_count(f):
+    # fixed -> open is a reopen; fixed -> partial is verification finding a
+    # remaining edge case (refinement), and must not feed the oscillation
+    # detector.
     n, prev = 0, None
     for e in sorted(f.get("status_history", []), key=lambda x: x.get("round", 0)):
         s = e.get("status")
-        if prev == "fixed" and s in OPENISH:
+        if prev == "fixed" and s == "open":
             n += 1
         prev = s
     return n
@@ -114,7 +117,10 @@ def main():
     if blockers_open == 0 and majors_open == 0 and not new_blocker_major:
         decision, reason = "converged", "no open blockers or majors; none newly introduced"
     elif any_reopened_twice or (net_prev is not None and net <= 0 and net_prev <= 0) or region_thrash:
-        decision, reason = "thrashing", "oscillation or non-positive net over two rounds or a churning region"
+        if blockers_open == 0 and closed > 0:
+            decision, reason = "thrashing_soft", "thrashing signals but with mitigating progress (0 open blockers, positive closes) — confirm with the human before aborting"
+        else:
+            decision, reason = "thrashing", "oscillation or non-positive net over two rounds or a churning region"
     elif disp_prev is not None and disp_now == disp_prev and len(disp_now) > 0:
         decision, reason = "stalemate", "identical disputed set for two consecutive rounds"
     elif net_prev is not None and net <= 1 and net_prev <= 1 and blockers_open == 0:

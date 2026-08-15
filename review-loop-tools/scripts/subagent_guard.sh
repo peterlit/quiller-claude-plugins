@@ -17,11 +17,23 @@ for d in .review-loop .qa-loop; do
   esac
   [ -d "$d/fragments" ] || continue
   python3 - "$d/fragments" <<'EOF' || exit 2
-import json, os, sys, time
+import json, os, re, sys, time
 frag_dir = sys.argv[1]
 VALID_TC = {"passed", "failed", "blocked", "skipped"}
+# Only police files the merge will actually consume; orchestrator briefs and
+# other artifacts in this directory are not ours to validate (they belong in
+# briefs/ anyway).
+FRAGMENT_NAME = re.compile(r"(seed|round-[A-Za-z0-9._-]+)\.json")
+known = set()
+ledger_path = os.path.join(os.path.dirname(frag_dir), "ledger.json")
+if os.path.exists(ledger_path):
+    try:
+        with open(ledger_path) as fh:
+            known = {f.get("id") for f in json.load(fh).get("findings", [])}
+    except Exception:
+        pass
 for name in sorted(os.listdir(frag_dir)):
-    if not name.endswith(".json"):
+    if not FRAGMENT_NAME.fullmatch(name):
         continue
     path = os.path.join(frag_dir, name)
     try:
@@ -40,10 +52,18 @@ for name in sorted(os.listdir(frag_dir)):
             if not isinstance(findings, list):
                 raise ValueError("no findings array")
             for f in findings:
-                for k in ("id", "severity", "current_status"):
+                for k in ("id", "current_status"):
                     if not f.get(k):
                         raise ValueError(
                             f"finding {f.get('id', '<no id>')} missing '{k}'")
+                is_new = f.get("id") not in known
+                if is_new and not f.get("severity"):
+                    raise ValueError(f"new finding {f['id']} missing 'severity'")
+                if is_new and not f.get("claim"):
+                    raise ValueError(
+                        f"new finding {f['id']} missing 'claim' — state the "
+                        f"defect and its concrete failure mode; the ledger "
+                        f"must stand alone")
                 for e in f.get("status_history") or []:
                     if not isinstance(e.get("round"), int):
                         raise ValueError(

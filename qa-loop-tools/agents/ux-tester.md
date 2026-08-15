@@ -162,11 +162,21 @@ fragment (path also given in your dispatch) uses:
 For the LEDGER fragment use this schema, with updated status_history and
 current_status:
 
+Every NEW finding must carry `claim`: what is wrong and its concrete failure
+mode, in 1-2 sentences. The ledger is the implementer's entire brief — your
+prose summary does not travel, so a finding whose substance lives only in
+your response is lost. Before minting a new finding, search the prior ledger
+for an existing finding covering the same issue in ANY status — including
+wontfix and resolved: reuse the id if it genuinely reopened, and never
+re-file an issue a human already decided. Never modify a fragment file you
+did not write.
+
 ```json
 {
   "findings": [
     {
       "id": "ux/WF-2:checkout-tap-count",
+      "claim": "A power user needs 9 taps to check out; WORKFLOWS.md budgets 3 — the flow detours through two confirmation screens.",
       "type": "ux-design",
       "routing": "proposal",
       "severity": "major",
