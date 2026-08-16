@@ -31,10 +31,19 @@ You orchestrate an iterative review loop between the `implementer` and
   the plugin directory.
 
 ## Setup (once)
-1. If `.review-loop/ledger.json` doesn't exist, create it with:
+1. If `.review-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
+   `.phase` says done), archive it before anything else:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py archive .review-loop`
+   (moves ledger, rounds, report, fragments, briefs, and .phase into
+   `.review-loop/archive/<timestamp-sha>/`; pass a name to override). Never
+   pile a new loop's files next to an old one's.
+2. If `.review-loop/ledger.json` doesn't exist, create it with:
    `{ "round": 0, "round_start_sha": null, "max_rounds": 5, "findings": [] }`
-   (use the user's max_rounds if they gave one).
-2. Seed findings — merged as ROUND 0, because the seed precedes round 1: a
+   (use the user's max_rounds if they gave one). Also write
+   `.review-loop/.gitignore` containing exactly these three lines:
+   `fragments/`, `briefs/`, `.phase` — ledger.json, rounds.md, REPORT.md,
+   and archive/ are meant to be committed.
+3. Seed findings — merged as ROUND 0, because the seed precedes round 1: a
    seed merged as round 1 poisons the net metric (N new, 0 closed) and makes
    a converging run look like thrashing. Three seed modes, in priority order:
    - SCOPE: the user named a change under review (a sha range, a diff file,
@@ -48,10 +57,13 @@ You orchestrate an iterative review loop between the `implementer` and
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .review-loop/ledger.json .review-loop/fragments/seed.json 0`
 
 ## Each round (N = 1 .. max_rounds)
-1. Set round_start_sha = current HEAD; persist it in ledger.json; set round = N.
-2. Write "round-<N>-implementing" to `.review-loop/.phase`. Dispatch
-   `implementer` with the OPEN findings + the reviewer's latest summary.
-   Wait for its CHANGES block and confirm it committed.
+1. Record the round without hand-editing:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py set-round .review-loop/ledger.json <N> <current HEAD sha>`
+2. Extract the implementer's brief — never hand-parse the ledger:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py open .review-loop/ledger.json > .review-loop/briefs/round-<N>-brief.json`
+   Write "round-<N>-implementing" to `.review-loop/.phase`. Dispatch
+   `implementer` with that brief + the reviewer's latest summary. Wait for
+   its CHANGES block and confirm it committed.
 3. Write "round-<N>-review" to `.review-loop/.phase`. Dispatch
    `skeptical-reviewer` with: the path to the prior ledger.json, the sha range
    `<round_start_sha>..HEAD` (it runs `git diff` on it itself — do NOT paste
@@ -65,10 +77,29 @@ You orchestrate an iterative review loop between the `implementer` and
    It appends a row to `.review-loop/rounds.md` and prints a JSON verdict with a
    `decision` field.
 6. Act on `decision`: `continue` -> go to round N+1. `thrashing_soft` ->
-   write "awaiting-human" to `.review-loop/.phase`, STOP, and ask the human:
-   abort with the report, or run one more round? (Approved continuation:
-   one more round; a second thrashing signal then is hard.) Anything else ->
-   write the final report, then set `.review-loop/.phase` to "done".
+   if a human can answer, write "awaiting-human" to `.review-loop/.phase`,
+   STOP, and ask: abort with the report, or run one more round? (Approved
+   continuation: one more round; a second thrashing signal then is hard.)
+   Running UNATTENDED, don't wait on an answer that cannot come — take the
+   default: abort with the report, then run CLOSEOUT. Anything else -> run
+   CLOSEOUT if eligible, write the final report, then set
+   `.review-loop/.phase` to "done".
+
+## Closeout (one mop-up cycle after any stop; skip if nothing is eligible)
+Eligible findings: open auto-routed findings that are introduced_by_fix (any
+severity — the loop created these regressions and must not ship them to
+BACKLOG), plus open minors. Open majors that are NOT introduced_by_fix are
+never closed out — they stopped the loop for a reason a human should see.
+1. Extract with the open verb; filter to the eligible set; write it to
+   `.review-loop/briefs/closeout-brief.json`.
+2. ONE `implementer` dispatch scoped to exactly those findings (phase
+   "round-<N>-implementing").
+3. ONE `skeptical-reviewer` dispatch verifying ONLY those fixes: the sha
+   range of the closeout commit, fragment
+   `.review-loop/fragments/round-<N>-closeout.json`, merged with round <N>.
+4. No metrics, no iteration. Fixes that fail verification go to BACKLOG.md
+   with the reviewer's note. Record the whole cycle in a "Closeout" section
+   of the report.
 
 ## Stop conditions (computed by metrics.py, evaluated in this order)
 - CONVERGED: 0 open blockers AND 0 open majors AND no new blockers/majors this
@@ -83,8 +114,9 @@ You orchestrate an iterative review loop between the `implementer` and
   continuation is hard — do not re-ask.
 - STALEMATE: the set of `disputed` finding IDs is identical for two consecutive
   rounds. -> stop; accepted disagreements.
-- DIMINISHING: net <= 1 for two consecutive rounds AND 0 open blockers. -> stop;
-  remaining findings go to BACKLOG.md.
+- DIMINISHING: net <= 1 for two consecutive rounds AND 0 open blockers AND no
+  new blockers/majors this round (a round that spawned regressions is not
+  "diminishing"). -> stop; remaining findings go to BACKLOG.md after closeout.
 - BACKSTOP: N == max_rounds. -> hard stop regardless of state.
 
 ## Final report (always)
@@ -98,3 +130,16 @@ Write `.review-loop/REPORT.md`:
   "look here because…". This is the part a human should actually read, because the
   loop cannot catch two same-family agents agreeing on a wrong fix.
 Print a one-line verdict and the path to the report.
+
+## Contracts (canonical fields and verbs)
+A finding's live status is `current_status`; a field named `status` exists
+ONLY inside status_history entries — extracting on a top-level `status`
+silently matches nothing. Canonical finding fields: id, claim, evidence,
+severity, region, first_seen_round, introduced_by_fix, status_history,
+current_status, note. The ONLY sanctioned ledger mutations are
+merge_ledger.py's verbs:
+- merge:     `merge_ledger.py <ledger> <fragment> <round>`
+- resolve:   `merge_ledger.py resolve <ledger> <id> <status> <round> "<note>"`
+- set-round: `merge_ledger.py set-round <ledger> <N> [sha]`
+- open:      `merge_ledger.py open <ledger> [auto|proposal|all]` (open+partial findings, for briefs)
+- archive:   `merge_ledger.py archive .review-loop [name]`

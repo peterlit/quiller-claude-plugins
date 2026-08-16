@@ -42,8 +42,13 @@ findings, and a HUMAN SKIM LIST.
 All state lives in the **target repository** under `.review-loop/`:
 `ledger.json` (findings ledger), `rounds.md` (per-round trend table), and
 `REPORT.md` (final report). Nothing is stored in the plugin directory, so
-findings never bleed between projects. Add `.review-loop/` to `.gitignore` if
-you don't want it committed.
+findings never bleed between projects. The loop writes its own
+`.review-loop/.gitignore` (`fragments/`, `briefs/`, `.phase`); the ledger,
+trend table, report, and `archive/` are meant to be committed. Each new loop
+archives the previous run's state into `.review-loop/archive/<name>/`
+automatically, and after any stop a **closeout** cycle fixes and re-verifies
+leftover cheap findings (the loop's own `introduced_by_fix` regressions and
+open minors) so they don't ship to BACKLOG unexamined.
 
 ## Model configuration
 

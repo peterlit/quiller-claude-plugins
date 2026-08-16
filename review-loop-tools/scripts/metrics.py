@@ -123,8 +123,12 @@ def main():
             decision, reason = "thrashing", "oscillation or non-positive net over two rounds or a churning region"
     elif disp_prev is not None and disp_now == disp_prev and len(disp_now) > 0:
         decision, reason = "stalemate", "identical disputed set for two consecutive rounds"
-    elif net_prev is not None and net <= 1 and net_prev <= 1 and blockers_open == 0:
-        decision, reason = "diminishing", "net <= 1 for two rounds and no open blockers"
+    elif (net_prev is not None and net <= 1 and net_prev <= 1
+          and blockers_open == 0 and not new_blocker_major):
+        # "Diminishing" must mean "nothing left to find" — net <= 1 includes
+        # deeply negative rounds, so a round that spawned new majors (often
+        # introduced_by_fix regressions) must never wind down to BACKLOG.
+        decision, reason = "diminishing", "net <= 1 for two rounds, no open blockers, no new blockers/majors"
     elif N >= max_rounds:
         decision, reason = "backstop", "hit max_rounds"
     else:

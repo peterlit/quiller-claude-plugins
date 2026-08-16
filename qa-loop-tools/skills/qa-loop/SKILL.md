@@ -24,7 +24,11 @@ subagents. You are PLUMBING ONLY.
   proposal") are recorded with the resolve verb:
   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py resolve .qa-loop/ledger.json <id> <status> <round> "<note>"`
   Top-level loop metadata (round, build_sha, implemented_rounds, settings)
-  is yours to maintain directly.
+  is yours to maintain — prefer the mechanical verbs:
+  `merge_ledger.py set-round <ledger> <N> [sha]` for round bookkeeping and
+  `merge_ledger.py open <ledger> auto` to extract implementer briefs into
+  `.qa-loop/briefs/` (a finding's live status is current_status; `status`
+  exists only inside status_history entries).
 - `.qa-loop/fragments/` is EXCLUSIVELY for subagent-written schema files,
   and no agent may modify a fragment it did not write. Anything YOU compose
   for a dispatch — open-findings extracts, briefs — goes in
@@ -64,6 +68,12 @@ points at it, with its usage documented in HARNESS_NOTES.md. Never let each
 tester rebuild a driver from scratch.
 
 ## Stage 1 — Workflows (once; the ONLY blocking human gate)
+0. If `.qa-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
+   `.phase` says done), archive it first:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py archive .qa-loop`
+   WORKFLOWS.md, TESTCASES.md, HARNESS_NOTES.md, and evidence/ stay in place
+   — they carry across loops; the per-run state moves to
+   `.qa-loop/archive/<timestamp-sha>/`.
 1. If `.qa-loop/ledger.json` doesn't exist, create it with:
    `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "implemented_rounds": [], "findings": [] }`
    (use the user's max_rounds and parallel_testers if they gave them; cap
@@ -248,7 +258,9 @@ skew every metric downstream.
   run one more round? A second thrashing signal after an approved
   continuation is hard — do not re-ask.
 - STALEMATE: identical `disputed` set for two consecutive rounds.
-- DIMINISHING: net <= 1 for two consecutive rounds AND 0 open blockers.
+- DIMINISHING: net <= 1 for two consecutive POST-IMPLEMENTATION rounds AND 0
+  open blockers AND no new blockers/majors this round (a round that spawned
+  regressions is not "diminishing").
 - BACKSTOP: N == max_rounds. Hard stop regardless of state.
 All metrics are computed over auto-routed findings only. Proposal-routed
 findings NEVER count toward convergence or thrashing — they are the human's

@@ -64,12 +64,16 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   implementation must satisfy.
   *In practice:* the only ledger surgery you should ever do by hand;
   everything else merges through scripts.
-- **`merge_ledger.py resolve`** `[both]` — records a decision on one finding
-  without hand-editing: `resolve <ledger> <id> <status> <round> "<note>"`.
-  *In practice:* the way to close a finding you've already decided against
-  ("wontfix — declined in 2796867") so testers stop re-filing it; resolved
-  and wontfixed findings travel with every dispatch precisely so agents
-  don't re-litigate them.
+- **`merge_ledger.py` verbs** `[both]` — the only sanctioned ledger
+  mutations: `resolve <ledger> <id> <status> <round> "<note>"` records a
+  human decision (close a finding you've already decided against so agents
+  stop re-filing it); `set-round <ledger> <N> [sha]` does round bookkeeping;
+  `open <ledger> [auto|proposal|all]` extracts open/partial findings as a
+  JSON brief; `archive <loop-dir> [name]` moves a finished run's state into
+  `archive/<name>/` so the next loop starts clean.
+  *In practice:* a finding's live status is `current_status` — a top-level
+  `status` field doesn't exist, which is why extraction goes through the
+  `open` verb instead of hand-parsing.
 - **`HARNESS_NOTES.md`** `[qa]` — simulator interaction quirks the testers
   learn (dwell-tap toggles, swipe-only sliders, screenshot scale factors),
   carried into every dispatch.
@@ -133,7 +137,17 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   signal after you approve a continuation is final.
   *In practice:* say "one more round" when the open findings are cheap and
   the trend is genuinely converging; take the abort when findings are
-  reopening.
+  reopening. Unattended runs don't wait: the default is abort-with-report,
+  then closeout.
+- **CLOSEOUT** `[review]` — after any stop, one mop-up cycle fixes and
+  re-verifies the leftover cheap findings: open `introduced_by_fix` findings
+  (any severity — the loop's own regressions never ship to BACKLOG
+  unexamined) plus open minors. One implementer dispatch, one targeted
+  reviewer verification, no iteration; failures land in BACKLOG.md with
+  notes and the report gets a Closeout section.
+  *In practice:* nothing to configure — it runs when eligible findings
+  exist. Open majors that aren't introduced_by_fix are deliberately excluded:
+  they stopped the loop for a reason you should read.
 - **Interrupting** `[qa]` — killing a round is always safe. Durable state:
   ledger, merged fragments, coverage, docs. Resume restarts the round from
   its deterministic reset.

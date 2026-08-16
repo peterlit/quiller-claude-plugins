@@ -170,8 +170,11 @@ def main():
     elif disp_prev is not None and disp_now == disp_prev and len(disp_now) > 0:
         decision, reason = "stalemate", "identical disputed set for two consecutive rounds"
     elif (net_prev is not None and net <= 1 and net_prev <= 1 and blockers_open == 0
-          and post_impl(N) and post_impl(N - 1)):
-        decision, reason = "diminishing", "net <= 1 for two post-implementation rounds and no open blockers"
+          and not new_blocker_major and post_impl(N) and post_impl(N - 1)):
+        # "Diminishing" must mean "nothing left to find" — net <= 1 includes
+        # deeply negative rounds, so a round that spawned new majors (often
+        # introduced_by_fix regressions) must never wind down to BACKLOG.
+        decision, reason = "diminishing", "net <= 1 for two post-implementation rounds, no open blockers, no new blockers/majors"
     elif N >= max_rounds:
         decision, reason = "backstop", "hit max_rounds"
     else:
