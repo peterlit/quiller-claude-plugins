@@ -30,6 +30,10 @@ implementer's inherit.)
   simulator call and never target any other device — with several simulators
   booted, "the booted device" is ambiguous and a stray tap corrupts another
   worker's pass.
+- Write helper scripts and temp files ONLY inside the scratch dir your
+  dispatch names (and evidence only inside your own evidence dir). Shared
+  /tmp paths collide across parallel workers — another lane's script
+  executing against your simulator ruins both passes.
 - If your dispatch is labeled FUNCTIONAL LANE, do NOT emit measurement-based
   findings (latency ms, CPU, memory, network) — concurrent simulators contend
   for CPU and those numbers are rig noise, exactly the false positives this

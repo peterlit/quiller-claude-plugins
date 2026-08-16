@@ -7,8 +7,12 @@
 #
 # `up` (re)creates qa-worker-1..N from a clean slate (existing qa-worker-*
 # devices are deleted first, so every pass starts deterministic), boots them,
-# and prints {"workers":[{"name":"qa-worker-1","udid":"..."}, ...]} on stdout.
-# `down` shuts down and deletes every qa-worker-* device.
+# creates an isolated scratch dir per worker (testers must write helper
+# scripts and temp files ONLY there — shared /tmp paths collide across
+# parallel workers), and prints
+# {"workers":[{"name":"qa-worker-1","udid":"...","scratch":".qa-loop/scratch/qa-worker-1"}, ...]}.
+# `down` shuts down and deletes every qa-worker-* device and removes
+# ./.qa-loop/scratch. Run from the target repo root.
 # Defaults: newest iPhone device type, newest available iOS runtime.
 set -euo pipefail
 
@@ -33,6 +37,7 @@ delete_workers() {
 case "$cmd" in
   down)
     delete_workers
+    rm -rf ./.qa-loop/scratch 2>/dev/null || true
     echo '{"workers":[]}'
     ;;
   up)
@@ -59,8 +64,10 @@ for r in json.load(sys.stdin)["runtimes"]:
     for i in $(seq 1 "$count"); do
       udid="$(xcrun simctl create "qa-worker-$i" "$devtype" "$runtime")"
       xcrun simctl bootstatus "$udid" -b >/dev/null
+      scratch=".qa-loop/scratch/qa-worker-$i"
+      mkdir -p "$scratch"
       [ -n "$out" ] && out+=","
-      out+="{\"name\":\"qa-worker-$i\",\"udid\":\"$udid\"}"
+      out+="{\"name\":\"qa-worker-$i\",\"udid\":\"$udid\",\"scratch\":\"$scratch\"}"
     done
     echo "{\"workers\":[$out]}"
     ;;

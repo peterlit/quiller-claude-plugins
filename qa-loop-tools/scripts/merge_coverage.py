@@ -4,10 +4,14 @@
 Usage: merge_coverage.py <coverage.json> <results-fragment.json> <round-number>
 
 Fragment schema:
-  {"results": [{"tc": "TC-2.1", "status": "passed|failed|blocked|skipped", "reason": ""}]}
-coverage.json schema:
-  {"rounds": {"<round>": {"TC-2.1": {"status": "...", "reason": "..."}}}}
-Later results for the same TC in the same round overwrite earlier ones (re-runs).
+  {"results": [{"tc": "TC-2.1", "persona": "novice|power",
+                "status": "passed|failed|blocked|skipped", "reason": ""}]}
+coverage.json schema (rows keyed by tc AND persona — a both-persona test case
+keeps one record per persona; last write wins only within the same
+(tc, persona) pair, i.e. genuine re-runs):
+  {"rounds": {"<round>": {"TC-2.1": {"novice": {"status": "...", "reason": "..."},
+                                     "power":  {"status": "...", "reason": "..."}}}}}
+Results without a persona field land under "unspecified".
 """
 import json, os, sys
 
@@ -39,14 +43,14 @@ def main():
         tc, status = r.get("tc"), r.get("status")
         if not tc or status not in VALID:
             die(f"bad result entry {r!r} (need tc + status in {sorted(VALID)})")
-        bucket[tc] = {"status": status, "reason": r.get("reason", "")}
-        if r.get("persona"):
-            bucket[tc]["persona"] = r["persona"]
+        persona = r.get("persona") or "unspecified"
+        bucket.setdefault(tc, {})[persona] = {"status": status,
+                                              "reason": r.get("reason", "")}
     with open(cov_path, "w") as fh:
         json.dump(cov, fh, indent=2)
         fh.write("\n")
     print(json.dumps({"round": rnd, "recorded": len(results),
-                      "round_total": len(bucket)}))
+                      "round_tcs": len(bucket)}))
 
 if __name__ == "__main__":
     main()

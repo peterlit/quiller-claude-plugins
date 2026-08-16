@@ -78,8 +78,9 @@ tester rebuild a driver from scratch.
    `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "implemented_rounds": [], "findings": [] }`
    (use the user's max_rounds and parallel_testers if they gave them; cap
    parallel_testers at 3 — each simulator wants 2-6GB of RAM). Also write
-   `.qa-loop/.gitignore` containing exactly these three lines:
-   `evidence/`, `fragments/`, `.phase` — everything else in `.qa-loop/`
+   `.qa-loop/.gitignore` containing exactly these five lines:
+   `evidence/`, `fragments/`, `briefs/`, `scratch/`, `.phase` — everything
+   else in `.qa-loop/`
    (WORKFLOWS.md, TESTCASES.md, HARNESS_NOTES.md, ledger.json, rounds.md,
    coverage.json, REPORT.md) is meant to be committed.
 2. If `.qa-loop/WORKFLOWS.md` already exists, its existence is NOT standing
@@ -149,8 +150,10 @@ skew every metric downstream.
 4. Write "round-<N>-testing" to `.qa-loop/.phase` and run the FUNCTIONAL LANE.
    Every chunk dispatch carries: its slice of the test set, the path to the
    prior ledger.json, the harness notes `.qa-loop/HARNESS_NOTES.md` (create it
-   empty if missing), the Fixture policy from WORKFLOWS.md, its evidence
-   directory, the fragment path `.qa-loop/fragments/round-<N>-<chunk-slug>.json`
+   empty if missing), the Fixture policy from WORKFLOWS.md, its OWN evidence
+   directory `.qa-loop/evidence/round-<N>/<chunk-slug>/` (one per dispatch —
+   dispatches never share an evidence dir, even on the same worker: filename
+   collisions corrupt evidence), the fragment path `.qa-loop/fragments/round-<N>-<chunk-slug>.json`
    where it must write its LEDGER, the results path
    `.qa-loop/fragments/round-<N>-<chunk-slug>.results.json` where it must
    record EVERY assigned test case (passed/failed/blocked/skipped + reason),
@@ -175,7 +178,9 @@ skew every metric downstream.
      `ux-tester` per worker IN A SINGLE MESSAGE (parallel foreground
      dispatches). Each dispatch is labeled FUNCTIONAL LANE and carries its
      worker's udid — the tester must pass that udid on every simulator call —
-     and its own evidence subdir `.qa-loop/evidence/round-<N>/<worker-name>/`.
+     plus its worker's scratch dir from the provisioning JSON: helper
+     scripts and temp files go ONLY there, never shared /tmp paths, which
+     collide across parallel workers.
      NO samplers in this lane: concurrent simulators contend for CPU, so
      testers flag perf candidates instead of emitting measurement findings.
 5. PERF LANE (parallel mode only): shut down all workers but one. On that
@@ -200,7 +205,12 @@ skew every metric downstream.
    `regression-test-writer` with those findings (ids, repro steps, evidence
    paths) and the fragment path `.qa-loop/fragments/round-<N>-regression.json`
    for any missing-identifier findings it files (merge that fragment if it
-   appears). It mines real selectors from the source, writes XCTSkip-guarded
+   appears). On the loop's FIRST regression dispatch, also sweep the archives:
+   scan `.qa-loop/archive/*/ledger.json` for bug findings that ended fixed
+   but have no test referencing their id (grep the UITest target and
+   `.qa-loop/regression-tests/`), and include them in the dispatch —
+   previously-fixed-but-unguarded bugs are exactly what regression tests are
+   for. It mines real selectors from the source, writes XCTSkip-guarded
    tests, and commits them separately. This step runs whatever the decision
    is — converged rounds deserve guards too.
 9. Act on `decision`:

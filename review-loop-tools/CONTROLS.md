@@ -45,7 +45,9 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   test can't break CI, and it never touches `project.pbxproj`.
   *In practice:* turn on once the app is stabilizing and you want findings to
   become durable CI tripwires. Verify each test's selectors once, delete the
-  skip line, done.
+  skip line, done. The first regression dispatch of a loop also sweeps
+  `.qa-loop/archive/*/ledger.json` for previously-fixed-but-unguarded bugs,
+  so turning the flag on late still captures earlier loops' fixes.
 
 ## Files that are controls
 

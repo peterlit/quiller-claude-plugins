@@ -92,8 +92,13 @@ def check_coverage(base_dir, N):
         with open(cov_path) as fh:
             round_cov = json.load(fh).get("rounds", {}).get(str(N), {})
     missing = [t for t in tc_ids if t not in round_cov]
-    blocked = [t for t in sorted(round_cov)
-               if round_cov[t].get("status") == "blocked"]
+    # Rows are keyed (tc, persona); a TC counts covered with >= 1 persona
+    # record, and blocked entries are reported per persona.
+    blocked = []
+    for t in sorted(round_cov):
+        for p, rec in sorted(round_cov[t].items()):
+            if isinstance(rec, dict) and rec.get("status") == "blocked":
+                blocked.append(f"{t}({p})")
     coverage = {"ran": len(tc_ids) - len(missing), "total": len(tc_ids),
                 "missing": missing, "blocked": blocked}
     return coverage, missing, manifest_exists
