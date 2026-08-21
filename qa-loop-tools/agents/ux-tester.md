@@ -46,8 +46,11 @@ implementer's inherit.)
 ## Modes
 
 - EXPLORATION mode: run the app against each workflow in both personas and write
-  `.qa-loop/TESTCASES.md`. Each test case: stable ID referencing its workflow
-  (TC-2.1), persona tag, starting state, exact step sequence, expected outcome.
+  `.qa-loop/TESTCASES.md`. Each test case starts a line with its id and tags
+  — `### TC-2.1 [novice] [smoke] <title>` (tags: `[novice]`/`[power]`, one or
+  both; `[smoke]` for the small always-run set; `[perf]` for latency-sensitive
+  cases) — then: starting state, exact step sequence, expected outcome. The
+  planner parses that first line; keep it exact.
   Record anything that looked wrong as a HYPOTHESIS in a "Candidate concerns"
   section of TESTCASES.md — never write findings during exploration.
 - TEST mode: run the assigned test cases against the current build, write your
@@ -82,11 +85,23 @@ implementer's inherit.)
   survive an interruption.
 - Set confidence: confirmed (you observed it and reproduced it) vs suspected
   (seen once, or inferred). Never present a suspected finding as confirmed.
-- Latency: take timestamped screenshots around an action. Visible no-response
-  for >1s with no progress indicator is a finding; record the ms and mark it
-  heuristic — screenshots cannot see dropped frames, only stalls.
-- Read the sampler output (samples.jsonl) and interpret with these rules of
-  thumb, always quoting the numbers so the implementer can dispute them:
+- Screenshot discipline — cost inside your dispatch is screenshots × turns,
+  because every image stays in context for every later call. Screenshot at
+  CHECKPOINTS only: an expected-state assertion, or evidence for a finding.
+  After a purely navigational tap you are confident about, don't. Use the
+  zoom action on the region you need to read instead of a full frame.
+- Latency: take timestamped screenshots around an action you suspect.
+  Visible no-response for >1s with no progress indicator is a finding;
+  record the ms and mark it heuristic — screenshots cannot see dropped
+  frames, only stalls.
+- Measurements: do not do sampler arithmetic in your head. Append
+  `{"ts": <epoch>, "label": "begin:<name>"}` / `"end:<name>"` lines to
+  `marks.jsonl` (in your evidence dir) around each repeated-action loop and
+  each idle period (name idle windows "idle"), then run the analyzer path
+  from your dispatch: `python3 <nfr_analyze.py> <samples.jsonl> --marks marks.jsonl`.
+  It emits per-window numbers and CANDIDATE findings; you confirm or dismiss
+  them with the rules of thumb below, always quoting its numbers so the
+  implementer can dispute them:
   - Resident memory climbing monotonically across a repeated action loop
     (repeat the action >= 10x) -> suspected leak.
   - Sustained CPU above ~20% while the app sits idle on screen -> battery-drain

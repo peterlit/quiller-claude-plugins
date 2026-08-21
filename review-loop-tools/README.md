@@ -78,6 +78,17 @@ loop at zero token cost: a `Stop` hook blocks the orchestrator from ending its
 turn while a round is in flight (tracked via `.review-loop/.phase`), and a
 `SubagentStop` hook validates fragment JSON before a subagent may finish.
 
+## Checkable claims and cheaper reports
+
+Three scripts move judgment-free work out of the models: `render_report.py`
+generates every mechanical section of REPORT.md (the orchestrator fills only
+the WATCH LIST), `hotspots.py` gives a cold review a churn-ranked map of
+where defects concentrate, and `mutate.py` re-runs an implementer's
+mutation-testing claims in an isolated `git worktree` from a manifest the
+implementer names in its CHANGES block — so "8/8 mutants killed" is
+verified, not trusted. The trend table also gains a Promoted column so a
+severity promotion on new evidence no longer looks like a regression.
+
 ## Optional commit guard
 
 A `PreToolUse` hook (`scripts/commit_guard.sh`) can block oversized or

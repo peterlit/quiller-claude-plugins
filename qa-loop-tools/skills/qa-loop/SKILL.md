@@ -38,8 +38,11 @@ subagents. You are PLUMBING ONLY.
   before dispatching the implementer, "round-<N>-fix-review" before
   dispatching the fix-reviewer, "round-<N>-regression-tests" before
   dispatching the regression-test-writer, "awaiting-human" when stopping at
-  the Stage 1 gate, and "done" right after the final report. An ended turn while the
-  phase says "round…" is a stall.
+  the Stage 1 gate, and "done" right after the final report. Right after
+  EVERY dispatch, append `:dispatched` (e.g. `round-2-testing:dispatched`):
+  the Stop hook allows a legitimate wait while it is present, and the
+  SubagentStop hook strips it when the agent returns — so an ended turn
+  while the phase says "round…" without the suffix is a stall, not a wait.
 - All loop state lives in the TARGET REPO at `.qa-loop/`. Never write it into
   the plugin directory. Suggest adding `.qa-loop/evidence/` to .gitignore.
 - While any tester dispatch is in flight, NOBODY touches a simulator — no
@@ -99,6 +102,9 @@ tester rebuild a driver from scratch.
    arguments, debug pickers, seeds, fixture data) and pin concrete values so
    every run is reproducible. If the app offers no way to pin its randomness,
    note that — the tester will file a proposal-routed finding recommending one.
+   Also give every workflow one `paths(WF-n): <dir/>, <file>, …` line naming
+   the source paths it exercises — you are reading the code anyway, and this
+   is what lets plan_round.py compute targeted passes deterministically.
 3. Write "awaiting-human" to `.qa-loop/.phase`, then STOP and ask the human to
    review WORKFLOWS.md. When you stop, announce the loop settings so the human
    can adjust them at this natural touchpoint: "max_rounds=<M>,
@@ -120,7 +126,11 @@ Write "round-0-testing" to `.qa-loop/.phase` (exploration counts as in-flight
 work for the stall guard). Dispatch `ux-tester` in EXPLORATION mode in CHUNKS — one dispatch per workflow,
 or batches of at most 3 workflows: each dispatch runs its workflows in both
 personas, APPENDS its test cases to `.qa-loop/TESTCASES.md`, and returns a
-one-line summary. Every workflow labeled for both personas must get at least
+one-line summary. Format contract: every test case starts a line with its
+id and tags — `### TC-2.1 [novice] [smoke] <title>` — tags `[novice]`
+`[power]` (one or both), `[smoke]` for the small always-run set, `[perf]`
+for latency-sensitive cases that belong in the perf lane. plan_round.py
+parses exactly this. Every workflow labeled for both personas must get at least
 one novice AND one power-user test case — a workflow tested by a single
 persona must say so explicitly in WORKFLOWS.md. Print a one-line progress
 update between dispatches ("WF-4/12 explored, 2 candidate concerns"). Never send all workflows to a
@@ -139,17 +149,22 @@ skew every metric downstream.
 ## Each round (N = 1 .. max_rounds)
 1. Preflight (Stage 0). Set build_sha = current HEAD; persist it; set round = N.
 2. Reset app state deterministically (on EVERY worker device, in parallel mode).
-3. Choose the test set:
-   - Round 1, or previous verdict was `full_pass_required`: FULL pass (all test
-     cases).
-   - Otherwise TARGETED: test cases whose workflows/screens are touched by the
-     diff since the last build_sha, the repro steps of every open or
-     claimed-fixed finding (skip fixes the fix review already rejected — they
-     are known bad and go back to the implementer instead), plus a small
-     fixed smoke set.
+3. Plan the round — deterministically, never by reasoning it out:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan_round.py .qa-loop <N> full|targeted --range <last build_sha>..HEAD --workers <parallel_testers>`
+   FULL for round 1 or after `full_pass_required`; TARGETED otherwise. The
+   script selects the set (diff-touched workflows via `paths(WF-n)`, the
+   test case of every open finding — rejected fixes skipped — and the
+   `[smoke]` set), splits it into chunk manifests of at most 5 test cases
+   each (cost inside a dispatch scales with screenshots × turns, so small
+   chunks are much cheaper than big ones), assigns workers, lists `[perf]`
+   cases for the perf lane, and writes `.qa-loop/briefs/round-<N>-plan.json`.
+   If it reports `unmapped_workflows` on a targeted pass, add their
+   `paths(...)` lines to WORKFLOWS.md and re-plan.
 4. Write "round-<N>-testing" to `.qa-loop/.phase` and run the FUNCTIONAL LANE.
-   Every chunk dispatch carries: its slice of the test set, the path to the
-   prior ledger.json, the harness notes `.qa-loop/HARNESS_NOTES.md` (create it
+   One dispatch per chunk manifest in the plan. Every chunk dispatch
+   carries: its manifest's test cases, ONLY its workflows' findings —
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py open .qa-loop/ledger.json auto --region <WF-n from the manifest> > .qa-loop/briefs/round-<N>-<slug>-findings.json`
+   — never the whole ledger, the harness notes `.qa-loop/HARNESS_NOTES.md` (create it
    empty if missing), the Fixture policy from WORKFLOWS.md, its OWN evidence
    directory `.qa-loop/evidence/round-<N>/<chunk-slug>/` (one per dispatch —
    dispatches never share an evidence dir, even on the same worker: filename
@@ -163,6 +178,10 @@ skew every metric downstream.
    for their workflows, labeled as hypotheses to reproduce or dismiss. Each
    chunk returns a 2-line summary only; print a one-line progress update per
    completed chunk.
+   Every tester also gets the analyzer path
+   `${CLAUDE_PLUGIN_ROOT}/scripts/nfr_analyze.py` (perf lane / single mode):
+   it marks its action windows in `marks.jsonl` and reads the analyzer's
+   numbers instead of doing sampler arithmetic in its own context.
    - parallel_testers == 1 (default): start the sampler in the background —
      it follows the app across relaunches by re-resolving the PID each tick,
      and never exits on its own (you stop it):
@@ -262,7 +281,9 @@ skew every metric downstream.
   net-negative and never count — that is what implemented_rounds gates), OR
   the same region recurs in new/reopened findings for three consecutive
   rounds. Regions are workflows/screens, so this catches "the loop keeps
-  churning the checkout screen."
+  churning the checkout screen." Exempt from the churn signal: a CONVERGING
+  SERIES — every open finding is introduced_by_fix, the worst open severity
+  is non-increasing over three rounds, nothing reopened.
 - THRASHING_SOFT: the same signals but with 0 open blockers AND positive
   closes this round. -> STOP and ask the human: abort with the report, or
   run one more round? A second thrashing signal after an approved
@@ -277,10 +298,14 @@ findings NEVER count toward convergence or thrashing — they are the human's
 decisions, and the loop must not deadlock on them.
 
 ## Final report (always)
-Write `.qa-loop/REPORT.md`:
-- Which stop condition fired and why.
-- The `.qa-loop/rounds.md` trend table.
-- Open findings by severity with evidence links.
+Render it — do not write it by hand:
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_report.py .qa-loop`
+generates every mechanical section from the state files: stop condition,
+trend table (incl. the Promoted column), open findings by severity with
+evidence, disputes, UX PROPOSALS, FIX REVIEW REJECTIONS, severity changes,
+PERSONA MATRIX and COVERAGE GAPS (from coverage.json), wontfix. Then edit
+ONLY the WATCH LIST slots and add material WORKFLOWS.md edits if any. What
+the sections mean, for your WATCH LIST judgment:
 - Disputed items (agree-to-disagree), with both sides' arguments.
 - UX PROPOSALS: every proposal-routed finding — the evidence, the cost to the
   user, and a sketch of the proposed fix. The human decides; to accept one,
@@ -334,9 +359,12 @@ LEDGER fragment (`.qa-loop/fragments/round-<N>-<slug>.json`):
   "status_history": [{ "round": 1, "status": "open" }],
   "current_status": "open", "note": "",
   "fix_risk": "metric-integrity | incentive | behavior-change | state-migration (OPTIONAL — set when the obvious fix is a trap)",
-  "constraints": ["OPTIONAL — written by the fix-reviewer's intent check on accepted proposals"]
+  "constraints": ["OPTIONAL — written by the fix-reviewer's intent check on accepted proposals"],
+  "severity_history": [{ "round": 3, "from": "minor", "to": "major" }]
 } ] }
 ```
+(`severity_history` is written by the merge when a fragment changes a
+finding's severity; it feeds the Promoted column — never write it yourself.)
 Fragments MAY omit status_history entirely — merge_ledger.py appends this
 round's entry from current_status. When status_history is included, every
 "round" value must be an integer (annotations go in "note").

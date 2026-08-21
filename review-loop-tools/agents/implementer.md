@@ -22,6 +22,12 @@ wontfix and accepted in prior rounds.
 
 After making changes:
 - Build and run tests. Do not report a fix you have not compiled.
+- If you mutation-test your tests, make the claim CHECKABLE: write a
+  manifest to `.review-loop/briefs/round-<N>-mutants.json` —
+  `{"test_cmd": "...", "mutants": [{"id", "file", "original", "replacement",
+  "line"(optional), "expect": "killed|survived"}]}` — and name it in CHANGES
+  as "mutations". The reviewer re-runs it in an isolated worktree; "8/8
+  killed" without a manifest is treated as an unverified claim.
 - Commit with message: "review-loop round <N>: <one-line summary>".
 
 Return a fenced ```json CHANGES block, then a short prose summary. Do not omit
@@ -36,6 +42,7 @@ the JSON block.
   ],
   "disputes": [
     { "id": "<finding-id>", "argument": "<why the reviewer is wrong>" }
-  ]
+  ],
+  "mutations": "<path to mutation manifest, or null>"
 }
 ```

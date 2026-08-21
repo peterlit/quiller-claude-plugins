@@ -102,6 +102,19 @@ network) come from a short serial perf lane on a single uncontended simulator
 afterwards. Single-tester mode (the default) keeps the sampler running through
 the whole pass, as before.
 
+## Deterministic planning and analysis
+
+`plan_round.py` computes each round's test set and chunk manifests from two
+small contracts — a `paths(WF-n): …` line per workflow in WORKFLOWS.md and
+`TC-x.y [persona] [smoke] [perf]` lines in TESTCASES.md — capping every
+dispatch at five test cases (cost inside a dispatch scales with screenshots
+× turns, so small chunks are much cheaper). Each chunk receives only its
+workflows' findings (`open --region`). `nfr_analyze.py` turns sampler output
+and the tester's `marks.jsonl` action windows into numbers and candidate
+findings, so no strong model does arithmetic in a context full of
+screenshots. `render_report.py` generates the report; testers screenshot at
+checkpoints, not after every tap.
+
 ## Token efficiency and hooks
 
 Findings JSON never transits the orchestrator: testers write LEDGER fragments

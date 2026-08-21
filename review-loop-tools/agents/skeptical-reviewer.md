@@ -64,6 +64,12 @@ trusting the implementer's claim:
 - wontfix  — implementer declined and their argument convinces you
 - disputed — implementer declined and you still disagree, OR their fix is wrong
 
+If the CHANGES block names a mutation manifest, re-run it yourself:
+`python3 <mutate.py path from your dispatch> <manifest>` — judge test
+quality from its output, never from a reported kill count. A mutation claim
+with no manifest is unverified; say so in the finding's note. If you were
+given a hotspot table (cold review), start there.
+
 Validate each disputed claim on its merits. If the implementer is right, flip your
 finding to wontfix and say so. Do not dig in for the sake of it.
 

@@ -70,8 +70,10 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   mutations: `resolve <ledger> <id> <status> <round> "<note>"` records a
   human decision (close a finding you've already decided against so agents
   stop re-filing it); `set-round <ledger> <N> [sha]` does round bookkeeping;
-  `open <ledger> [auto|proposal|all]` extracts open/partial findings as a
-  JSON brief; `archive <loop-dir> [name]` moves a finished run's state into
+  `open <ledger> [auto|proposal|all|closeout] [--region WF-n]` extracts
+  open/partial findings as a JSON brief (`closeout` = the closeout-eligible
+  set; `--region` = only one workflow's findings, for tester chunks);
+  `archive <loop-dir> [name]` moves a finished run's state into
   `archive/<name>/` so the next loop starts clean.
   *In practice:* a finding's live status is `current_status` — a top-level
   `status` field doesn't exist, which is why extraction goes through the
@@ -85,10 +87,28 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   orchestrator from ending its turn while it reads `round-…`.
   *In practice:* escape hatch — if a dead session leaves the guard armed,
   write `done` into it and the guard stands down.
-- **What to commit** `[qa]` — the loop writes its own `.qa-loop/.gitignore`:
-  `evidence/`, `fragments/`, and `.phase` stay out; WORKFLOWS, TESTCASES,
-  HARNESS_NOTES, ledger, rounds, coverage, and REPORT are meant to be
-  committed.
+- **What to commit** `[both]` — each loop writes its own `.gitignore`
+  (`evidence/`, `fragments/`, `briefs/`, `scratch/`, `.phase` stay out);
+  WORKFLOWS, TESTCASES, HARNESS_NOTES, ledger, rounds, coverage, REPORT, and
+  `archive/` are meant to be committed.
+
+- **Deterministic helpers** `[both]` — `render_report.py <loop-dir>` renders
+  every mechanical REPORT.md section (trend incl. Promoted column, findings,
+  proposals, rejections, persona matrix, coverage gaps, closeout); the model
+  fills only the WATCH LIST. `[review]` `hotspots.py` maps git churn × size ×
+  recency so cold reviews read where defects live; `mutate.py <manifest>`
+  re-runs an implementer's mutation claims in an isolated worktree — "8/8
+  killed" is now checkable (the implementer names its manifest in CHANGES as
+  `mutations`). `[qa]` `plan_round.py` selects the targeted set and emits
+  ≤5-test-case chunk manifests from `paths(WF-n)` lines in WORKFLOWS.md and
+  `TC-x.y [persona] [smoke] [perf]` lines in TESTCASES.md; `nfr_analyze.py`
+  turns sampler output plus the tester's `marks.jsonl` windows into numbers
+  and candidate findings.
+  *In practice:* you don't run these yourself — they are why the loops got
+  cheaper. The two obligations they create: every workflow needs a
+  `paths(WF-n): …` line (the orchestrator writes it at Stage 1), and every
+  test case line must start `TC-x.y [persona]` with optional `[smoke]` /
+  `[perf]` tags.
 
 ## Model pins
 
@@ -140,7 +160,9 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   *In practice:* say "one more round" when the open findings are cheap and
   the trend is genuinely converging; take the abort when findings are
   reopening. Unattended runs don't wait: the default is abort-with-report,
-  then closeout.
+  then closeout. A converging series (every open finding introduced_by_fix,
+  worst severity non-increasing, no reopens) no longer trips the churn
+  signal at all.
 - **CLOSEOUT** `[review]` — after any stop, one mop-up cycle fixes and
   re-verifies the leftover cheap findings: open `introduced_by_fix` findings
   (any severity — the loop's own regressions never ship to BACKLOG

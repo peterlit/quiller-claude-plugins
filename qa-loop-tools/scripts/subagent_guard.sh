@@ -9,6 +9,17 @@
 set -euo pipefail
 cat >/dev/null 2>&1 || true   # drain stdin; the payload isn't needed
 
+# A subagent just finished: the phase's "dispatched" state is over. Strip the
+# suffix so the Stop hook can again tell "waiting" from "forgot to act".
+for d in .review-loop .qa-loop; do
+  if [ -f "$d/.phase" ]; then
+    case "$(cat "$d/.phase")" in
+      *:dispatched) sed -i '' 's/:dispatched$//' "$d/.phase" 2>/dev/null \
+                    || sed -i 's/:dispatched$//' "$d/.phase" ;;
+    esac
+  fi
+done
+
 for d in .review-loop .qa-loop; do
   [ -f "$d/.phase" ] || continue
   case "$(cat "$d/.phase")" in

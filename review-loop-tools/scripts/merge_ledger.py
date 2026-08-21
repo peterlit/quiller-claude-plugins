@@ -5,7 +5,7 @@ Usage:
   merge_ledger.py <ledger.json> <fragment.json> <round-number>
   merge_ledger.py resolve <ledger.json> <finding-id> <status> <round> [note]
   merge_ledger.py set-round <ledger.json> <round> [sha]
-  merge_ledger.py open <ledger.json> [auto|proposal|all]
+  merge_ledger.py open <ledger.json> [auto|proposal|all|closeout] [--region WF-n]
   merge_ledger.py archive <loop-dir> [name]
 
 Merge mode: the fragment is {"findings": [...]}. Existing findings are
@@ -24,6 +24,10 @@ sha is given, whichever of round_start_sha/build_sha the ledger uses.
 
 open: prints the open/partial findings (status_history stripped) as JSON —
 the sanctioned way to build an implementer brief; write it into briefs/.
+"closeout" selects the closeout-eligible set (auto-routed, introduced_by_fix
+or minor); --region WF-n (repeatable) keeps only findings in those regions,
+so a tester chunk receives the findings relevant to its workflows, not the
+whole ledger. Merges record severity changes in severity_history.
 
 archive: moves a finished loop's state (ledger.json, rounds.md, REPORT.md,
 coverage.json, fragments/, briefs/, .phase) into <loop-dir>/archive/<name>/,
@@ -114,14 +118,25 @@ def set_round(args):
     print(json.dumps(out))
 
 def open_findings(args):
+    usage = ("usage: merge_ledger.py open <ledger.json> "
+             "[auto|proposal|all|closeout] [--region WF-n ...]")
     if len(args) < 1:
-        print("usage: merge_ledger.py open <ledger.json> [auto|proposal|all]",
-              file=sys.stderr)
+        print(usage, file=sys.stderr)
         sys.exit(2)
     path = args[0]
-    routing = args[1] if len(args) > 1 else "all"
-    if routing not in ("auto", "proposal", "all"):
-        print(f"merge_ledger: routing filter must be auto|proposal|all, "
+    routing, regions = "all", []
+    rest = list(args[1:])
+    while rest:
+        a = rest.pop(0)
+        if a == "--region":
+            if not rest:
+                print(usage, file=sys.stderr)
+                sys.exit(2)
+            regions.append(rest.pop(0))
+        else:
+            routing = a
+    if routing not in ("auto", "proposal", "all", "closeout"):
+        print(f"merge_ledger: filter must be auto|proposal|all|closeout, "
               f"got '{routing}'", file=sys.stderr)
         sys.exit(1)
     with open(path) as fh:
@@ -130,8 +145,22 @@ def open_findings(args):
     for f in ledger.get("findings", []):
         if f.get("current_status") not in ("open", "partial"):
             continue
-        if routing != "all" and f.get("routing", "auto") != routing:
+        r = f.get("routing", "auto")
+        if routing == "closeout":
+            # Closeout eligibility: auto-routed, and either a regression the
+            # loop itself introduced (any severity) or a plain minor.
+            if r != "auto":
+                continue
+            if not (f.get("introduced_by_fix") or f.get("severity") == "minor"):
+                continue
+        elif routing != "all" and r != routing:
             continue
+        if regions:
+            reg = str(f.get("region", ""))
+            tc = str(f.get("test_case", ""))
+            if not any(reg.startswith(x) or tc.startswith(x.replace("WF-", "TC-") + ".")
+                       for x in regions):
+                continue
         sel.append({k: v for k, v in f.items() if k != "status_history"})
     print(json.dumps({"findings": sel}, indent=2))
 
@@ -157,7 +186,7 @@ def archive(args):
     dest = os.path.join(loop_dir, "archive", name)
     moved = []
     for item in ("ledger.json", "rounds.md", "REPORT.md", "coverage.json",
-                 "fragments", "briefs", ".phase"):
+                 "verdict.json", "fragments", "briefs", ".phase"):
         src = os.path.join(loop_dir, item)
         if os.path.exists(src):
             os.makedirs(dest, exist_ok=True)
@@ -194,10 +223,16 @@ def main():
         status = nf.get("current_status", "open")
         if fid in by_id:
             f = by_id[fid]
+            old_sev = f.get("severity")
             for k, v in nf.items():
-                if k in ("status_history", "first_seen_round", "evidence"):
+                if k in ("status_history", "first_seen_round", "evidence",
+                         "severity_history"):
                     continue
                 f[k] = v
+            new_sev = f.get("severity")
+            if old_sev and new_sev and old_sev != new_sev:
+                f.setdefault("severity_history", []).append(
+                    {"round": rnd, "from": old_sev, "to": new_sev})
             if "evidence" in nf or "evidence" in f:
                 f["evidence"] = union_evidence(f.get("evidence"), nf.get("evidence"))
             hist = f.setdefault("status_history", [])

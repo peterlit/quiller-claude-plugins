@@ -70,6 +70,35 @@ def open_count(findings, r, severity):
 def disputed_set(findings, r):
     return frozenset(f["id"] for f in findings if status_at(f, r) == "disputed")
 
+SEV_RANK = {"blocker": 3, "major": 2, "minor": 1}
+
+def max_open_severity(findings, r):
+    return max([SEV_RANK.get(f.get("severity"), 0) for f in findings
+                if status_at(f, r) in OPENISH], default=0)
+
+def promotions(findings, r):
+    up = down = 0
+    for f in findings:
+        for e in f.get("severity_history", []) or []:
+            if e.get("round") == r:
+                if SEV_RANK.get(e.get("to"), 0) > SEV_RANK.get(e.get("from"), 0):
+                    up += 1
+                else:
+                    down += 1
+    return up, down
+
+def converging_series(findings, r):
+    """Every open finding is a regression the loop itself introduced, the
+    worst open severity is non-increasing over three rounds, and nothing
+    reopened: that is residue shrinking by construction, not churn."""
+    open_now = [f for f in findings if status_at(f, r) in OPENISH]
+    if not open_now or not all(f.get("introduced_by_fix") for f in open_now):
+        return False
+    if not (max_open_severity(findings, r) <= max_open_severity(findings, r - 1)
+            <= max_open_severity(findings, r - 2)):
+        return False
+    return net_for(findings, r)[2] == 0 and net_for(findings, r - 1)[2] == 0
+
 def main():
     if len(sys.argv) < 3:
         die("usage: metrics.py <ledger.json> <round>")
@@ -110,8 +139,9 @@ def main():
             healthy = all(
                 net_for(findings, r)[3] > 0 and net_for(findings, r)[2] == 0
                 for r in (N, N - 1))
-            region_thrash = not healthy
+            region_thrash = not (healthy or converging_series(findings, N))
     any_reopened_twice = any(reopen_count(f) >= 2 for f in findings)
+    promoted, demoted = promotions(findings, N)
 
     # decision, in priority order
     if blockers_open == 0 and majors_open == 0 and not new_blocker_major:
@@ -137,19 +167,24 @@ def main():
     verdict = {
         "round": N, "blockers_open": blockers_open, "majors_open": majors_open,
         "minors_open": minors_open, "closed": closed, "new": new,
-        "reopened": reopened, "net": net, "decision": decision, "reason": reason,
+        "reopened": reopened, "promoted": promoted, "demoted": demoted,
+        "net": net, "decision": decision, "reason": reason,
     }
 
     rounds_md = os.path.join(os.path.dirname(os.path.abspath(path)), "rounds.md")
-    header = "| Round | Blockers | Majors | Minors | Closed | New | Reopened | Net | Decision |\n"
-    sep = "|-------|----------|--------|--------|--------|-----|----------|-----|----------|\n"
+    header = "| Round | Blockers | Majors | Minors | Closed | New | Reopened | Promoted | Net | Decision |\n"
+    sep = "|-------|----------|--------|--------|--------|-----|----------|----------|-----|----------|\n"
     if not os.path.exists(rounds_md):
         with open(rounds_md, "w") as fh:
             fh.write(header + sep)
     with open(rounds_md, "a") as fh:
         fh.write(f"| {N} | {blockers_open} | {majors_open} | {minors_open} | "
-                 f"{closed} | {new} | {reopened} | {net:+d} | {decision} |\n")
+                 f"{closed} | {new} | {reopened} | {promoted} | {net:+d} | {decision} |\n")
 
+    with open(os.path.join(os.path.dirname(os.path.abspath(path)),
+                           "verdict.json"), "w") as fh:
+        json.dump(verdict, fh, indent=2)
+        fh.write("\n")
     print(json.dumps(verdict, indent=2))
 
 if __name__ == "__main__":
