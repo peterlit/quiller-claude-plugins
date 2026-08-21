@@ -85,7 +85,9 @@ tester rebuild a driver from scratch.
    `evidence/`, `fragments/`, `briefs/`, `scratch/`, `.phase` — everything
    else in `.qa-loop/`
    (WORKFLOWS.md, TESTCASES.md, HARNESS_NOTES.md, ledger.json, rounds.md,
-   coverage.json, REPORT.md) is meant to be committed.
+   coverage.json, REPORT.md) is meant to be committed — unless
+   `git check-ignore -q .qa-loop` says the repo ignores the directory; then
+   say so at the gate and in the report instead of claiming otherwise.
 2. If `.qa-loop/WORKFLOWS.md` already exists, its existence is NOT standing
    sign-off for stale facts. Check whether the app changed since the doc's
    last commit (`git log -1 --format=%ct -- .qa-loop/WORKFLOWS.md` vs the

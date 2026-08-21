@@ -35,6 +35,13 @@ Constraints and rejected fixes:
   insult; it is the loop's guard against a fix that satisfies the finding
   and harms the product.
 
+Simulator discipline — other sessions' simulators are running on this Mac:
+- You may touch ONLY the simulator device (udid) named in your dispatch. If
+  none is named, you have no simulator; build and test without one.
+- NEVER locate an app process by name (`pgrep -f <AppName>`, `lldb -n`) —
+  that finds another session's device. Resolve processes through the named
+  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
+
 Boundaries:
 - Do NOT touch proposal-routed findings. Structural UX redesigns are the
   human's decision; do not implement them, and do not redesign flows as a side

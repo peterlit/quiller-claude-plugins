@@ -90,7 +90,15 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
 - **What to commit** `[both]` — each loop writes its own `.gitignore`
   (`evidence/`, `fragments/`, `briefs/`, `scratch/`, `.phase` stay out);
   WORKFLOWS, TESTCASES, HARNESS_NOTES, ledger, rounds, coverage, REPORT, and
-  `archive/` are meant to be committed.
+  `archive/` are meant to be committed. If your repo ignores the whole loop
+  directory, the loop notices (`git check-ignore`) and says so rather than
+  pretending — archives then live only on that machine.
+- **Simulator discipline** `[both]` — every agent may touch only the device
+  udid named in its dispatch, and never finds an app process by name
+  (`pgrep -f`, `lldb -n`): other sessions' simulators share your Mac, and an
+  unscoped attach once fired a memory warning into someone else's device.
+  *In practice:* if you run several loops at once, this is the rule keeping
+  them apart; the orchestrator names one booted device per dispatch.
 
 - **Deterministic helpers** `[both]` — `render_report.py <loop-dir>` renders
   every mechanical REPORT.md section (trend incl. Promoted column, findings,

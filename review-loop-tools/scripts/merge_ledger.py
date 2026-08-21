@@ -112,6 +112,9 @@ def set_round(args):
                and "round_start_sha" not in ledger else "round_start_sha")
         ledger[key] = sha
         out[key] = sha
+        # Per-round shas let render_report list each round's largest diffs
+        # as WATCH LIST candidates even when every finding is fixed.
+        ledger.setdefault("round_shas", {})[str(rnd)] = sha
     with open(path, "w") as fh:
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
@@ -180,6 +183,17 @@ def archive(args):
             sha = (led.get("round_start_sha") or led.get("build_sha") or "")[:7]
         except Exception:
             pass
+    # Name the archive after the repo's HEAD at archive time (the state the
+    # loop ended on), not the previous loop's starting sha.
+    try:
+        import subprocess
+        head = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(loop_dir)),
+                               "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True)
+        if head.returncode == 0 and head.stdout.strip():
+            sha = head.stdout.strip()
+    except Exception:
+        pass
     name = (args[1] if len(args) > 1 else
             datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
             + (f"-{sha}" if sha else ""))

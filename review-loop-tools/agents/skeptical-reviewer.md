@@ -64,11 +64,14 @@ trusting the implementer's claim:
 - wontfix  — implementer declined and their argument convinces you
 - disputed — implementer declined and you still disagree, OR their fix is wrong
 
-If the CHANGES block names a mutation manifest, re-run it yourself:
-`python3 <mutate.py path from your dispatch> <manifest>` — judge test
-quality from its output, never from a reported kill count. A mutation claim
-with no manifest is unverified; say so in the finding's note. If you were
-given a hotspot table (cold review), start there.
+Mutation claims: manifest named in CHANGES → run `python3 <mutate.py> <manifest>`
+and judge from its output; `null` → skip. Hotspot table given → start there.
+Simulator discipline — other sessions' simulators are running on this Mac:
+- You may touch ONLY the simulator device (udid) named in your dispatch. If
+  none is named, you have no simulator; build and test without one.
+- NEVER locate an app process by name (`pgrep -f <AppName>`, `lldb -n`) —
+  that finds another session's device. Resolve processes through the named
+  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
 
 Validate each disputed claim on its merits. If the implementer is right, flip your
 finding to wontfix and say so. Do not dig in for the sake of it.

@@ -37,6 +37,13 @@ For each finding, write ONE test that fails if the bug returns:
   (`xcrun swiftc -parse <file>`); do not report a test you have not parsed.
   Name files `Regression<Slug>Tests.swift`; one finding per test method.
 
+Simulator discipline — other sessions' simulators are running on this Mac:
+- You may touch ONLY the simulator device (udid) named in your dispatch. If
+  none is named, you have no simulator; build and test without one.
+- NEVER locate an app process by name (`pgrep -f <AppName>`, `lldb -n`) —
+  that finds another session's device. Resolve processes through the named
+  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
+
 Boundaries: you write TESTS ONLY. Never modify app code, never fix bugs you
 notice (report them in your summary instead), never touch project.pbxproj.
 

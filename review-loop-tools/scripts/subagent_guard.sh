@@ -75,6 +75,15 @@ for name in sorted(os.listdir(frag_dir)):
                         f"new finding {f['id']} missing 'claim' — state the "
                         f"defect and its concrete failure mode; the ledger "
                         f"must stand alone")
+                if is_new and "evidence" in f:
+                    ev = f["evidence"]
+                    ok = (isinstance(ev, list) and ev and all(isinstance(x, str) for x in ev)) or (
+                        isinstance(ev, dict) and any(ev.get(k) for k in ("screenshots", "repro", "measurements")))
+                    if not ok:
+                        raise ValueError(
+                            f"new finding {f['id']}: 'evidence' must be a non-empty "
+                            f"list of file:line strings, or an object with non-empty "
+                            f"screenshots/repro/measurements — got {ev!r}")
                 for e in f.get("status_history") or []:
                     if not isinstance(e.get("round"), int):
                         raise ValueError(

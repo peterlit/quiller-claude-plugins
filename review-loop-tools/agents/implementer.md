@@ -20,6 +20,14 @@ Use judgment — do not fix things you believe are wrong just to close them. A
 well-argued WONTFIX is a valid outcome. Do NOT touch findings already marked
 wontfix and accepted in prior rounds.
 
+
+Simulator discipline — other sessions' simulators are running on this Mac:
+- You may touch ONLY the simulator device (udid) named in your dispatch. If
+  none is named, you have no simulator; build and test without one.
+- NEVER locate an app process by name (`pgrep -f <AppName>`, `lldb -n`) —
+  that finds another session's device. Resolve processes through the named
+  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
+
 After making changes:
 - Build and run tests. Do not report a fix you have not compiled.
 - If you mutation-test your tests, make the claim CHECKABLE: write a

@@ -11,7 +11,7 @@ promotions, persona matrix, coverage gaps, closeout, resolutions. The one
 section that needs judgment, WATCH LIST, is emitted as candidate stubs with a
 "look here because:" slot the orchestrator fills in. Works for both loops.
 """
-import glob, json, os, sys
+import glob, json, os, subprocess, sys
 
 OPENISH = ("open", "partial")
 SEV_ORDER = ("blocker", "major", "minor")
@@ -213,13 +213,42 @@ def main():
             cands.append((f.get("id"), ", ".join(why)))
     for fid, why in cands:
         L.append(f"- **{fid}** ({why}) — look here because: <!-- orchestrator fills -->")
-    L.append("- <!-- plus the 3-5 most invasive diffs across all rounds, with commits -->")
+    # Largest diffs per round — always listed, even when every finding is
+    # fixed: "all fixed" is exactly the two-agents-agreeing case.
+    shas = ledger.get("round_shas") or {}
+    repo = os.path.dirname(os.path.abspath(loop))
+    diff_cands = 0
+    for rnd in sorted(shas, key=int):
+        start = shas[rnd]
+        end = shas.get(str(int(rnd) + 1), "HEAD")
+        try:
+            ns = subprocess.run(["git", "-C", repo, "diff", "--numstat", f"{start}..{end}"],
+                                capture_output=True, text=True, timeout=30)
+        except Exception:
+            break
+        if ns.returncode != 0:
+            continue
+        files = []
+        for line in ns.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                files.append((int(parts[0]) + int(parts[1]), parts[0], parts[1], parts[2]))
+        if not files:
+            continue
+        files.sort(reverse=True)
+        total = sum(f[0] for f in files)
+        top = ", ".join(f"`{p}` (+{a}/-{d})" for _, a, d, p in files[:3])
+        L.append(f"- **round {rnd} diff** `{start[:7]}..{end[:7] if end != 'HEAD' else 'HEAD'}` — "
+                 f"{len(files)} files, {total} lines; largest: {top} — look here because: <!-- orchestrator fills -->")
+        diff_cands += 1
+    if not shas:
+        L.append("- <!-- no round_shas in ledger (set-round records them); list the 3-5 most invasive diffs with commits by hand -->")
     L.append("")
 
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(L))
     print(json.dumps({"report": out_path, "findings": len(findings),
-                      "watch_candidates": len(cands)}))
+                      "watch_candidates": len(cands) + diff_cands}))
 
 if __name__ == "__main__":
     main()

@@ -58,5 +58,12 @@ recorded best-times"). Write a fragment setting, per finding:
 "constraints": [...], "intent_checked": true, and current_status copied
 unchanged from the ledger. Return a one-line summary per proposal.
 
+Simulator discipline — other sessions' simulators are running on this Mac:
+- You may touch ONLY the simulator device (udid) named in your dispatch. If
+  none is named, you have no simulator; build and test without one.
+- NEVER locate an app process by name (`pgrep -f <AppName>`, `lldb -n`) —
+  that finds another session's device. Resolve processes through the named
+  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
+
 Do not review style, naming, or broad architecture — that is another
 plugin's job. Every judgment cites the diff or the code, never vibes.

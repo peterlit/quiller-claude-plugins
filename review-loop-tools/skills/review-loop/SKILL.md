@@ -33,6 +33,9 @@ You orchestrate an iterative review loop between the `implementer` and
   the suffix is a stall, not a wait.
 - All loop state lives in the TARGET REPO at `.review-loop/`. Never write it into
   the plugin directory.
+- If the project is an app that runs in a simulator, name ONE device udid in
+  every dispatch (boot it yourself first). Agents may touch only that device
+  — other sessions' simulators share this Mac.
 
 ## Setup (once)
 1. If `.review-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
@@ -46,7 +49,10 @@ You orchestrate an iterative review loop between the `implementer` and
    (use the user's max_rounds if they gave one). Also write
    `.review-loop/.gitignore` containing exactly these three lines:
    `fragments/`, `briefs/`, `.phase` — ledger.json, rounds.md, REPORT.md,
-   and archive/ are meant to be committed.
+   and archive/ are meant to be committed. Check `git check-ignore -q
+   .review-loop`: if the repo ignores the whole directory, say so now and in
+   the report ("loop state is not versioned in this repo") instead of
+   claiming otherwise.
 3. Seed findings — merged as ROUND 0, because the seed precedes round 1: a
    seed merged as round 1 poisons the net metric (N new, 0 closed) and makes
    a converging run look like thrashing. Three seed modes, in priority order:
@@ -59,8 +65,10 @@ You orchestrate an iterative review loop between the `implementer` and
      `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hotspots.py` and hand the reviewer
      its table: a cold review should spend its reading budget where churn and
      history say defects concentrate, not sweep the tree uniformly.
-   Tell it to write its LEDGER to `.review-loop/fragments/seed.json` and to
-   OMIT first_seen_round and status_history (the merge stamps them), then:
+   Write "seed-review" to `.review-loop/.phase` before this dispatch (then
+   `seed-review:dispatched`) — the seed is a wait like any round. Tell it to
+   write its LEDGER to `.review-loop/fragments/seed.json` and to OMIT
+   first_seen_round and status_history (the merge stamps them), then:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .review-loop/ledger.json .review-loop/fragments/seed.json 0`
 
 ## Each round (N = 1 .. max_rounds)
