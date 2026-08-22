@@ -179,9 +179,11 @@ def main():
                 ids |= {x.get("id") for x in (load(cf) or {}).get("findings", [])}
             except Exception:
                 pass
+        # One line per finding — the full entries already appear above.
         for f in findings:
             if f.get("id") in ids:
-                L += finding_line(f)
+                L.append(f"- **{f.get('id')}** — {f.get('current_status')}"
+                         + (f"; {f['note']}" if f.get("note") else ""))
         L.append("")
     else:
         L.append("_no closeout cycle ran_\n")
@@ -218,6 +220,32 @@ def main():
     shas = ledger.get("round_shas") or {}
     repo = os.path.dirname(os.path.abspath(loop))
     diff_cands = 0
+
+    def numstat(rng):
+        try:
+            ns = subprocess.run(["git", "-C", repo, "diff", "--numstat", rng],
+                                capture_output=True, text=True, timeout=30)
+        except Exception:
+            return None
+        if ns.returncode != 0:
+            return None
+        files = []
+        for line in ns.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                files.append((int(parts[0]) + int(parts[1]), parts[0], parts[1], parts[2]))
+        files.sort(reverse=True)
+        return files
+
+    # The change under review (seed scope) comes FIRST: it is where the
+    # findings actually lived, and the loop's own rounds only patched it.
+    if ledger.get("scope"):
+        files = numstat(ledger["scope"])
+        if files:
+            top = ", ".join(f"`{p}` (+{a}/-{d})" for _, a, d, p in files[:3])
+            L.append(f"- **seed scope** `{ledger['scope']}` — {len(files)} files, "
+                     f"{sum(f[0] for f in files)} lines; largest: {top} — look here because: <!-- orchestrator fills -->")
+            diff_cands += 1
     for rnd in sorted(shas, key=int):
         start = shas[rnd]
         end = shas.get(str(int(rnd) + 1), "HEAD")

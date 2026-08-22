@@ -165,9 +165,11 @@ Finding ID convention: "<type>/<region>:<short-slug>" where region is a workflow
 ID or screen name, e.g. "bug/CheckoutScreen:total-off-by-tax" or
 "ux/WF-2:checkout-tap-count".
 
-Write your LEDGER to the fragment file path given in your dispatch — write to
-a temporary file first, then `mv` it into place, so a partial write is never
-visible to the validation hook or a parallel worker's merge. Do NOT paste the
+Write your LEDGER to the fragment file path given in your dispatch — write
+INCREMENTALLY to `<fragment>.partial` after each finding you verify, then
+`mv` it to the final name when done, so a killed dispatch leaves your work
+behind and a half-written file is never visible at the final name. If your
+dispatch hands you a prior `.partial`, resume from it. Do NOT paste the
 LEDGER JSON into your response: it travels by file, and your response is only
 a 2-3 line summary (counts by severity and status, perf candidates if you are
 in the functional lane, plus anything the implementer must know). Your results

@@ -7,6 +7,7 @@ Usage:
   merge_ledger.py set-round <ledger.json> <round> [sha]
   merge_ledger.py open <ledger.json> [auto|proposal|all|closeout] [--region WF-n]
   merge_ledger.py archive <loop-dir> [name]
+  merge_ledger.py scope <ledger.json> <range>
 
 Merge mode: the fragment is {"findings": [...]}. Existing findings are
 updated (scalar fields overwritten, evidence lists unioned, status_history
@@ -167,6 +168,20 @@ def open_findings(args):
         sel.append({k: v for k, v in f.items() if k != "status_history"})
     print(json.dumps({"findings": sel}, indent=2))
 
+def set_scope(args):
+    """Record the change under review (a sha range) so render_report can
+    list the scope diff as the FIRST watch-list candidate."""
+    if len(args) < 2:
+        print("usage: merge_ledger.py scope <ledger.json> <a..b>", file=sys.stderr)
+        sys.exit(2)
+    with open(args[0]) as fh:
+        ledger = json.load(fh)
+    ledger["scope"] = args[1]
+    with open(args[0], "w") as fh:
+        json.dump(ledger, fh, indent=2)
+        fh.write("\n")
+    print(json.dumps({"scope": args[1]}))
+
 def archive(args):
     import datetime, shutil
     if len(args) < 1:
@@ -214,7 +229,7 @@ def archive(args):
 
 def main():
     verbs = {"resolve": resolve, "set-round": set_round,
-             "open": open_findings, "archive": archive}
+             "open": open_findings, "archive": archive, "scope": set_scope}
     if len(sys.argv) >= 2 and sys.argv[1] in verbs:
         verbs[sys.argv[1]](sys.argv[2:])
         return

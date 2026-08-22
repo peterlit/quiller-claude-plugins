@@ -51,6 +51,9 @@ Boundaries:
   fresh eyes next round; your job ends at a clean build and a commit.
 
 After making changes:
+- Run builds, tests, and any long command SYNCHRONOUSLY inside your turn —
+  never as a background task. A return without your CHANGES block is read
+  as a pause, and the orchestrator will have to come back for you.
 - Build the app and run the unit tests if the project has them. Do not report a
   fix you have not compiled.
 - Commit with message: "qa-loop round <N>: <one-line summary>".

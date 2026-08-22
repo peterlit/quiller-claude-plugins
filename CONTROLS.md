@@ -74,7 +74,8 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   open/partial findings as a JSON brief (`closeout` = the closeout-eligible
   set; `--region` = only one workflow's findings, for tester chunks);
   `archive <loop-dir> [name]` moves a finished run's state into
-  `archive/<name>/` so the next loop starts clean.
+  `archive/<name>/` so the next loop starts clean; `scope <ledger> <a..b>`
+  records the change under review so the report's WATCH LIST leads with it.
   *In practice:* a finding's live status is `current_status` — a top-level
   `status` field doesn't exist, which is why extraction goes through the
   `open` verb instead of hand-parsing.
@@ -83,10 +84,23 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   carried into every dispatch.
   *In practice:* pre-seed it. If you already know "the radar slider needs a
   swipe," write it in before round 1 and no tester ever rediscovers it.
-- **`.phase`** `[both]` — the stall-guard marker; a Stop hook blocks the
-  orchestrator from ending its turn while it reads `round-…`.
+- **`.phase`** `[both]` — the stall-guard marker with three honest states:
+  bare `round-N-…` (a dispatch is owed; the Stop hook blocks), `…:dispatched`
+  (an agent is running; stripped automatically when it returns), and
+  `…:waiting:<reason>` (the orchestrator is waiting on something that isn't
+  a subagent — a 529 backoff, a background task, you; the hooks leave it
+  alone). Each plugin's hooks guard only their own loop directory.
   *In practice:* escape hatch — if a dead session leaves the guard armed,
   write `done` into it and the guard stands down.
+- **Retry and fallback policy** `[both]` — a dispatch that dies with no
+  fragment is retried up to 3× with in-turn backoff (60/180/300 s); agents
+  write `<fragment>.partial` incrementally so a killed dispatch leaves its
+  work, and the retry resumes from it. A pinned model is never swapped
+  silently: fallback only after three failures, disclosed in the report.
+  A result without its artifact (no CHANGES block, no fragment) is a pause —
+  the same agent is resumed, never re-dispatched.
+  *In practice:* nothing to configure; if you see "ran on <model>: outage"
+  in a report, that round's adversarial diversity was reduced.
 - **What to commit** `[both]` — each loop writes its own `.gitignore`
   (`evidence/`, `fragments/`, `briefs/`, `scratch/`, `.phase` stay out);
   WORKFLOWS, TESTCASES, HARNESS_NOTES, ledger, rounds, coverage, REPORT, and

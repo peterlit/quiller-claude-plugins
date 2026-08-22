@@ -43,6 +43,8 @@ subagents. You are PLUMBING ONLY.
   the Stop hook allows a legitimate wait while it is present, and the
   SubagentStop hook strips it when the agent returns — so an ended turn
   while the phase says "round…" without the suffix is a stall, not a wait.
+  For waits that are not a subagent, use `…:waiting:<reason>` (see
+  Waiting, failures, and pauses).
 - All loop state lives in the TARGET REPO at `.qa-loop/`. Never write it into
   the plugin directory. Suggest adding `.qa-loop/evidence/` to .gitignore.
 - While any tester dispatch is in flight, NOBODY touches a simulator — no
@@ -87,7 +89,9 @@ tester rebuild a driver from scratch.
    (WORKFLOWS.md, TESTCASES.md, HARNESS_NOTES.md, ledger.json, rounds.md,
    coverage.json, REPORT.md) is meant to be committed — unless
    `git check-ignore -q .qa-loop` says the repo ignores the directory; then
-   say so at the gate and in the report instead of claiming otherwise.
+   say so at the gate and in the report instead of claiming otherwise, and
+   at the end append one line to the repo-root BACKLOG.md naming the
+   archive path — in an ignored tree that pointer is what survives.
 2. If `.qa-loop/WORKFLOWS.md` already exists, its existence is NOT standing
    sign-off for stale facts. Check whether the app changed since the doc's
    last commit (`git log -1 --format=%ct -- .qa-loop/WORKFLOWS.md` vs the
@@ -270,6 +274,30 @@ skew every metric downstream.
      ask the human: abort with the report, or run one more round? (Approved
      continuation: one more round; a second thrashing signal then is hard.)
    - anything else: stop and write the final report.
+
+
+## Waiting, failures, and pauses (the phase marker is not a binary)
+- Three marker states: bare `round-N-…` = you owe a dispatch (the Stop hook
+  blocks); `…:dispatched` = an agent is running (stripped automatically when
+  it returns, including on failure); `…:waiting:<reason>` = you are honestly
+  waiting on something that is NOT a subagent — a backoff, a background task,
+  a human. The hooks never touch `:waiting:`; you clear it when you resume.
+  Never re-stamp `:dispatched` with nothing running — use `:waiting:`.
+- Transport failures (529 / overloaded / no fragment written): retry the SAME
+  dispatch up to 3 times with backoff INSIDE your turn (`sleep 60`, `180`,
+  `300`) — an in-turn sleep never ends the turn, so there is nothing for the
+  guard to misread. Never swap a pinned model silently. A model fallback is
+  allowed only after three failures, must be disclosed in the report
+  ("<agent> ran on <model> for round N: outage"), and the affected fragment
+  gets a note saying so.
+- Partial work survives: agents write `<fragment>.partial` incrementally and
+  `mv` it to the final name when done. A dead dispatch that left a
+  `.partial` gets retried WITH that file as "your prior work — resume, do not
+  redo". The guard ignores `.partial` files by construction.
+- A result without its artifact — an implementer with no CHANGES block, a
+  reviewer/tester with no fragment — is a PAUSE, not a completion (it
+  usually stopped to wait on a background child). Resume the SAME agent
+  (SendMessage); never re-dispatch a paused agent.
 
 ## Stop conditions (computed by qa_metrics.py, evaluated in this order)
 - CONVERGED: 0 open auto-routed blockers AND majors, none newly introduced this

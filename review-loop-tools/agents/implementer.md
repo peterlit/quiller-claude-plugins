@@ -29,6 +29,9 @@ Simulator discipline — other sessions' simulators are running on this Mac:
   udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
 
 After making changes:
+- Run `mutate.py`, builds, and any long command SYNCHRONOUSLY inside your
+  turn — never as a background task. A return without your CHANGES block is
+  read as a pause, and the orchestrator will have to come back for you.
 - Build and run tests. Do not report a fix you have not compiled.
 - If you mutation-test your tests, make the claim CHECKABLE: write a
   manifest to `.review-loop/briefs/round-<N>-mutants.json` —

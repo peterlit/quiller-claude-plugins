@@ -30,7 +30,8 @@ You orchestrate an iterative review loop between the `implementer` and
   marker (e.g. `round-2-review:dispatched`): the Stop hook then allows a
   legitimate wait, and the SubagentStop hook strips the suffix when the
   agent returns — so an ended turn while the phase says "round…" without
-  the suffix is a stall, not a wait.
+  the suffix is a stall, not a wait. For waits that are not a subagent,
+  use `…:waiting:<reason>` (see Waiting, failures, and pauses).
 - All loop state lives in the TARGET REPO at `.review-loop/`. Never write it into
   the plugin directory.
 - If the project is an app that runs in a simulator, name ONE device udid in
@@ -52,13 +53,19 @@ You orchestrate an iterative review loop between the `implementer` and
    and archive/ are meant to be committed. Check `git check-ignore -q
    .review-loop`: if the repo ignores the whole directory, say so now and in
    the report ("loop state is not versioned in this repo") instead of
-   claiming otherwise.
+   claiming otherwise — and at the end, append one line to the repo-root
+   BACKLOG.md naming the archive path: in an ignored tree the archive is the
+   only copy, and BACKLOG.md is what survives.
 3. Seed findings — merged as ROUND 0, because the seed precedes round 1: a
    seed merged as round 1 poisons the net metric (N new, 0 closed) and makes
    a converging run look like thrashing. Three seed modes, in priority order:
    - SCOPE: the user named a change under review (a sha range, a diff file,
-     or a PR) — dispatch `skeptical-reviewer` to review only that scope (it
-     computes the diff itself from the range).
+     or a PR) — record it first,
+     `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py scope .review-loop/ledger.json <a..b>`
+     (render_report lists the scope diff as the FIRST watch-list candidate —
+     it is where the findings actually live), then dispatch
+     `skeptical-reviewer` to review only that scope (it computes the diff
+     itself from the range).
    - REVIEW.md at the repo root — dispatch it to convert that into the
      LEDGER schema.
    - Otherwise — a cold full review of HEAD. First run
@@ -118,8 +125,33 @@ never closed out — they stopped the loop for a reason a human should see.
    range of the closeout commit, fragment
    `.review-loop/fragments/round-<N>-closeout.json`, merged with round <N>.
 4. No metrics, no iteration. Fixes that fail verification go to BACKLOG.md
-   with the reviewer's note. Record the whole cycle in a "Closeout" section
-   of the report.
+   with the reviewer's note — and so does any NEW finding the closeout
+   reviewer opens (no further cycle; list it in the Closeout section with
+   its note). Record the whole cycle in a "Closeout" section of the report.
+
+
+## Waiting, failures, and pauses (the phase marker is not a binary)
+- Three marker states: bare `round-N-…` = you owe a dispatch (the Stop hook
+  blocks); `…:dispatched` = an agent is running (stripped automatically when
+  it returns, including on failure); `…:waiting:<reason>` = you are honestly
+  waiting on something that is NOT a subagent — a backoff, a background task,
+  a human. The hooks never touch `:waiting:`; you clear it when you resume.
+  Never re-stamp `:dispatched` with nothing running — use `:waiting:`.
+- Transport failures (529 / overloaded / no fragment written): retry the SAME
+  dispatch up to 3 times with backoff INSIDE your turn (`sleep 60`, `180`,
+  `300`) — an in-turn sleep never ends the turn, so there is nothing for the
+  guard to misread. Never swap a pinned model silently. A model fallback is
+  allowed only after three failures, must be disclosed in the report
+  ("<agent> ran on <model> for round N: outage"), and the affected fragment
+  gets a note saying so.
+- Partial work survives: agents write `<fragment>.partial` incrementally and
+  `mv` it to the final name when done. A dead dispatch that left a
+  `.partial` gets retried WITH that file as "your prior work — resume, do not
+  redo". The guard ignores `.partial` files by construction.
+- A result without its artifact — an implementer with no CHANGES block, a
+  reviewer/tester with no fragment — is a PAUSE, not a completion (it
+  usually stopped to wait on a background child). Resume the SAME agent
+  (SendMessage); never re-dispatch a paused agent.
 
 ## Stop conditions (computed by metrics.py, evaluated in this order)
 - CONVERGED: 0 open blockers AND 0 open majors AND no new blockers/majors this
@@ -166,6 +198,7 @@ merge_ledger.py's verbs:
 - set-round: `merge_ledger.py set-round <ledger> <N> [sha]`
 - open:      `merge_ledger.py open <ledger> [auto|proposal|all|closeout] [--region X]` (open+partial findings, for briefs)
 - archive:   `merge_ledger.py archive .review-loop [name]`
+- scope:     `merge_ledger.py scope <ledger> <a..b>` (the change under review; first watch-list candidate)
 Merges record severity changes in `severity_history` (the Promoted column).
 Other scripts: `render_report.py <loop-dir>` (the report), `hotspots.py`
 (cold-review map), `mutate.py <manifest>` (re-run an implementer's mutation
