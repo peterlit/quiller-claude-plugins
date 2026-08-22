@@ -44,6 +44,28 @@ Review across these axes (adjust to the actual stack you find):
 - Tests: do they exist, do they test behavior or just compile, real vs apparent
   coverage.
 
+
+## Reading discipline (measured: 66% of loop cost was file dumps into context)
+- Locate with `grep -n`, then read a WINDOW of <=120 lines — the Read tool
+  with offset/limit (preferred) or `sed -n 'A,Bp'`. Never `cat` a file over
+  200 lines. A guard hook denies the worst cases with the fix; re-issue the
+  windowed command.
+- The round diff is on disk: your dispatch names `briefs/round-N.stat` and
+  `briefs/round-N.diff`. Read the stat first, then per-file hunks from the
+  diff file (`grep -n '^diff --git'` for offsets). Never re-pull the whole
+  diff with git; a single-file `git diff <range> -- <path>` is fine.
+- Tests: run the SCOPED command (the implementer's `verify_cmd`, or
+  `-only-testing:` / `swift test --filter` for the touched classes) and
+  filter the output: `2>&1 | grep -E 'error:|failed|Executed|passed'`. One
+  unfiltered app-suite run measured at ~150K tokens. The FULL suite runs
+  exactly once per loop — by the closeout reviewer (or the final round's
+  reviewer when no closeout runs) — never inside a round.
+
+SCOPE seeds: in scope = the changed files plus their direct callers.
+Unchanged modules are OUT of scope unless the diff calls into them — do not
+re-derive subsystems the change never touched. The author's own
+verification, if listed, is a set of claims to spot-check, not to repeat.
+
 ## Structured output (required)
 
 You are given the prior ledger JSON and (except on the seed round) a sha range

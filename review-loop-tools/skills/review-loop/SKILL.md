@@ -39,6 +39,12 @@ You orchestrate an iterative review loop between the `implementer` and
   — other sessions' simulators share this Mac.
 
 ## Setup (once)
+0. PRECONDITION — a fresh session. Measured: the identical plumbing request
+   costs ~3.3x more in a large-context session (8.5M vs 2.6M over 22
+   rounds). A hook reports this session's transcript size when the loop is
+   invoked; if it warned, tell the human and recommend restarting the loop
+   in a new session before doing anything else. Proceed only if they accept
+   the cost.
 1. If `.review-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
    `.phase` says done), archive it before anything else:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py archive .review-loop`
@@ -46,8 +52,13 @@ You orchestrate an iterative review loop between the `implementer` and
    `.review-loop/archive/<timestamp-sha>/`; pass a name to override). Never
    pile a new loop's files next to an old one's.
 2. If `.review-loop/ledger.json` doesn't exist, create it with:
-   `{ "round": 0, "round_start_sha": null, "max_rounds": 5, "findings": [] }`
-   (use the user's max_rounds if they gave one). Also write
+   `{ "round": 0, "round_start_sha": null, "max_rounds": 5, "token_budget": null, "findings": [] }`
+   (use the user's max_rounds / token_budget if they gave them). SCOPE mode
+   defaults max_rounds to 2 — every measured scoped run converged by round
+   2 or 3 — and ESCALATES to 5 automatically if the seed or round 1 yields a
+   blocker (say so when it happens). Cold reviews keep 5. token_budget is a
+   hard ceiling on cumulative subagent tokens (BUDGET stop); leave null to
+   disable. Also write
    `.review-loop/.gitignore` containing exactly these three lines:
    `fragments/`, `briefs/`, `.phase` — ledger.json, rounds.md, REPORT.md,
    and archive/ are meant to be committed. Check `git check-ignore -q
@@ -78,31 +89,34 @@ You orchestrate an iterative review loop between the `implementer` and
    first_seen_round and status_history (the merge stamps them), then:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .review-loop/ledger.json .review-loop/fragments/seed.json 0`
 
-## Each round (N = 1 .. max_rounds)
-1. Record the round without hand-editing:
-   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py set-round .review-loop/ledger.json <N> <current HEAD sha>`
-2. Extract the implementer's brief — never hand-parse the ledger:
-   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py open .review-loop/ledger.json > .review-loop/briefs/round-<N>-brief.json`
-   Write "round-<N>-implementing" to `.review-loop/.phase`. Dispatch
-   `implementer` with that brief + the reviewer's latest summary. Wait for
-   its CHANGES block and confirm it committed. If the block names a
-   `mutations` manifest, pass its path to the reviewer next step.
-3. Write "round-<N>-review" to `.review-loop/.phase`. Dispatch
-   `skeptical-reviewer` with: the path to the prior ledger.json, the sha range
-   `<round_start_sha>..HEAD` (it runs `git diff` on it itself — do NOT paste
-   the diff), the implementer's CHANGES block (labeled as claims to validate),
-   the mutation manifest path if one was named plus
-   `${CLAUDE_PLUGIN_ROOT}/scripts/mutate.py` (so it re-runs the mutants instead
-   of trusting "N/N killed"), and the fragment path
-   `.review-loop/fragments/round-<N>.json` where it must write its LEDGER. It
-   returns a short summary only.
-4. Merge deterministically — never by hand:
-   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .review-loop/ledger.json .review-loop/fragments/round-<N>.json <N>`
-5. Run metrics and read its decision:
-   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/metrics.py .review-loop/ledger.json <N>`
-   It appends a row to `.review-loop/rounds.md` and prints a JSON verdict with a
-   `decision` field.
-6. Act on `decision`: `continue` -> go to round N+1. `thrashing_soft` ->
+## Each round (N = 1 .. max_rounds) — three plumbing turns, not seven
+Each orchestrator turn re-reads the whole session context (~25K effective
+per turn measured); the verbs below fold the bookkeeping into single calls.
+Start: after the seed merge, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py next-round .review-loop 0`
+advances to round 1 — records the sha, writes
+`briefs/round-1-brief.json` (blockers and majors ONLY: minors never cost a
+round; they are fixed in the one closeout pass), and sets the phase marker.
+1. Dispatch `implementer` with the brief + the reviewer's latest summary
+   (the Agent-tool hook stamps `:dispatched` for you). Wait for its CHANGES
+   block, confirm it committed, then record its cost:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py set-usage .review-loop/ledger.json <N> implementer <tokens from the task result>`
+2. Materialize the diff ONCE, write the phase, dispatch the reviewer:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py diff .review-loop <N> <round_start_sha>..HEAD`
+   (writes `briefs/round-<N>.diff` and `.stat` — nothing enters your
+   context). Write "round-<N>-review" to `.review-loop/.phase`. Dispatch
+   `skeptical-reviewer` with: the ledger path, the `.stat` and `.diff` paths
+   (stat first, per-file hunks, never the whole diff twice), the CHANGES
+   block (claims to validate) including its `verify_cmd` (the scoped test
+   command — the full suite runs once, at closeout), the mutation manifest
+   path if named plus `${CLAUDE_PLUGIN_ROOT}/scripts/mutate.py`, and the
+   fragment path `.review-loop/fragments/round-<N>.json`. Record its cost
+   with set-usage when it returns.
+3. Close the round in one call — merge, metrics, and (if continuing) the
+   advance to N+1 with its brief and phase marker:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py next-round .review-loop <N> --fragment .review-loop/fragments/round-<N>.json`
+   It prints the verdict (`decision`, open counts) and, on `continue`, the
+   next round's brief path.
+4. Act on `decision`: `continue` -> go to round N+1. `thrashing_soft` ->
    if a human can answer, write "awaiting-human" to `.review-loop/.phase`,
    STOP, and ask: abort with the report, or run one more round? (Approved
    continuation: one more round; a second thrashing signal then is hard.)
@@ -124,6 +138,8 @@ never closed out — they stopped the loop for a reason a human should see.
 3. ONE `skeptical-reviewer` dispatch verifying ONLY those fixes: the sha
    range of the closeout commit, fragment
    `.review-loop/fragments/round-<N>-closeout.json`, merged with round <N>.
+   This is the ONE place the full test suite runs (filtered output); rounds
+   run scoped commands only.
 4. No metrics, no iteration. Fixes that fail verification go to BACKLOG.md
    with the reviewer's note — and so does any NEW finding the closeout
    reviewer opens (no further cycle; list it in the Closeout section with
@@ -173,6 +189,8 @@ never closed out — they stopped the loop for a reason a human should see.
   new blockers/majors this round (a round that spawned regressions is not
   "diminishing"). -> stop; remaining findings go to BACKLOG.md after closeout.
 - BACKSTOP: N == max_rounds. -> hard stop regardless of state.
+- BUDGET: cumulative subagent tokens (from set-usage) >= token_budget. ->
+  stop, closeout, report. Evaluated right after CONVERGED.
 
 ## Final report (always)
 Render it — do not write it by hand:
@@ -199,6 +217,14 @@ merge_ledger.py's verbs:
 - open:      `merge_ledger.py open <ledger> [auto|proposal|all|closeout] [--region X]` (open+partial findings, for briefs)
 - archive:   `merge_ledger.py archive .review-loop [name]`
 - scope:     `merge_ledger.py scope <ledger> <a..b>` (the change under review; first watch-list candidate)
+- diff:      `merge_ledger.py diff <loop-dir> <N> <a..b>` (materialize the round diff + stat for subagents)
+- set-usage: `merge_ledger.py set-usage <ledger> <N> <role> <tokens>` (Tokens column; feeds token_budget)
+- next-round:`merge_ledger.py next-round <loop-dir> <N> [--fragment F]` (merge + metrics + advance, one turn)
+The CHANGES block carries `verify_cmd` (scoped tests the reviewer reruns).
+Hooks active during a loop: `read_guard` denies whole-file dumps,
+unfiltered test runs, and whole-diff re-pulls (with the fix in the message);
+`dispatch_stamp` marks `:dispatched` when you call the Agent tool;
+`session_guard` reports the session transcript size when a loop is invoked.
 Merges record severity changes in `severity_history` (the Promoted column).
 Other scripts: `render_report.py <loop-dir>` (the report), `hotspots.py`
 (cold-review map), `mutate.py <manifest>` (re-run an implementer's mutation

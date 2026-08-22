@@ -26,13 +26,32 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   cheap pass. Never run the session on a model an agent is pinned to (see
   Model pins).
 
+## Before you start
+
+- **A fresh session** `[both]` — the single largest measured lever: the same
+  plumbing request costs ~3.3× more in a large-context session (8.5M vs
+  2.6M tokens over 22 rounds). A `UserPromptSubmit` hook reports the
+  transcript size whenever a loop is invoked and warns above 2 MB.
+  *In practice:* start loops in a new session. If you run one inside a long
+  session anyway, say so at the gate — the loop will ask.
+
 ## Loop configuration
 
 *Surface: `.qa-loop/ledger.json`, created on first run.*
 
-- **`max_rounds`** `[both]` (default 5) — the hard iteration backstop.
-  *In practice:* 2–3 for a smoke pass; 5 for a real hardening run. The
-  Stage-1 gate quotes a cost estimate — trim this number there if it's steep.
+- **`max_rounds`** `[both]` (default 5; **2 in review scope mode**, auto-
+  escalating to 5 if a blocker appears) — the hard iteration backstop.
+  Measured: every scoped review converged by round 2–3, and DIMINISHING
+  cannot fire before round 3, so a higher cap never saved anything.
+  *In practice:* leave the defaults; raise it only for cold full reviews of
+  large trees.
+- **`token_budget`** `[both]` (default null) — a hard ceiling on cumulative
+  subagent tokens. The orchestrator records each dispatch's cost
+  (`set-usage`) from the task results; `rounds.md` gains a Tokens column,
+  and the BUDGET stop fires (closeout + report) when the sum crosses the
+  ceiling.
+  *In practice:* set it to what the Stage-1 estimate quoted plus margin; the
+  report then shows exactly where the money went.
 - **`parallel_testers`** `[qa]` (default 1, cap 3) — runs test passes across
   N isolated worker simulators. Functional checks parallelize; performance
   measurement always runs on one uncontended simulator (the perf lane). Cuts
@@ -75,7 +94,11 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   set; `--region` = only one workflow's findings, for tester chunks);
   `archive <loop-dir> [name]` moves a finished run's state into
   `archive/<name>/` so the next loop starts clean; `scope <ledger> <a..b>`
-  records the change under review so the report's WATCH LIST leads with it.
+  records the change under review so the report's WATCH LIST leads with it;
+  `diff <loop-dir> <N> <a..b>` materializes the round diff once for
+  subagents; `set-usage` records token cost; `next-round <loop-dir> <N>
+  [--fragment F]` folds merge + metrics + advance into one orchestrator
+  turn (each turn re-reads the whole session context).
   *In practice:* a finding's live status is `current_status` — a top-level
   `status` field doesn't exist, which is why extraction goes through the
   `open` verb instead of hand-parsing.
@@ -107,6 +130,17 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   `archive/` are meant to be committed. If your repo ignores the whole loop
   directory, the loop notices (`git check-ignore`) and says so rather than
   pretending — archives then live only on that machine.
+- **Minors never cost a round** `[review]` — round briefs carry blockers and
+  majors only; minors (21 of 26 findings in the measured runs) accumulate and
+  are fixed in the single closeout pass, where they were already eligible.
+  *In practice:* nothing to set. If you want minors fixed in-round for a
+  specific run, say so and the orchestrator briefs with `--severity minor`.
+- **Read guard** `[both]` — while a loop phase is in flight, a `PreToolUse`
+  hook denies the measured token sinks with the fix in its message: `cat` of
+  a >200-line file, `head`/`sed` windows over 200 lines, unfiltered
+  `xcodebuild test`/`swift test`, and re-pulling a whole diff that is already
+  materialized in `briefs/round-N.diff`. Agents re-issue a windowed or
+  filtered command; nothing is lost. Inactive outside loop phases.
 - **Simulator discipline** `[both]` — every agent may touch only the device
   udid named in its dispatch, and never finds an app process by name
   (`pgrep -f`, `lldb -n`): other sessions' simulators share your Mac, and an

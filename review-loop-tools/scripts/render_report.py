@@ -72,6 +72,11 @@ def main():
                  f"{verdict.get('round')} — {verdict.get('reason')}\n")
     else:
         L.append("**Stop condition:** unknown (no verdict.json — metrics never ran?)\n")
+    usage = ledger.get("usage") or {}
+    if usage:
+        tot = sum(sum(v.values()) for v in usage.values())
+        L.append(f"**Subagent tokens:** {tot:,} across {len(usage)} round(s)"
+                 + (f" (budget {int(ledger['token_budget']):,})" if ledger.get("token_budget") else "") + "\n")
     counts = {}
     for f in findings:
         counts[f.get("current_status")] = counts.get(f.get("current_status"), 0) + 1

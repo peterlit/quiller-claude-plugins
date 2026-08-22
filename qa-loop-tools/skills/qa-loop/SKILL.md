@@ -39,7 +39,8 @@ subagents. You are PLUMBING ONLY.
   dispatching the fix-reviewer, "round-<N>-regression-tests" before
   dispatching the regression-test-writer, "awaiting-human" when stopping at
   the Stage 1 gate, and "done" right after the final report. Right after
-  EVERY dispatch, append `:dispatched` (e.g. `round-2-testing:dispatched`):
+  EVERY dispatch, `:dispatched` is appended for you by a hook on the Agent
+  tool (e.g. `round-2-testing:dispatched`):
   the Stop hook allows a legitimate wait while it is present, and the
   SubagentStop hook strips it when the agent returns — so an ended turn
   while the phase says "round…" without the suffix is a stall, not a wait.
@@ -80,7 +81,11 @@ tester rebuild a driver from scratch.
    — they carry across loops; the per-run state moves to
    `.qa-loop/archive/<timestamp-sha>/`.
 1. If `.qa-loop/ledger.json` doesn't exist, create it with:
-   `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "implemented_rounds": [], "findings": [] }`
+   `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "token_budget": null, "implemented_rounds": [], "findings": [] }`
+   (token_budget: a hard ceiling on cumulative subagent tokens — record each
+   dispatch's cost with `merge_ledger.py set-usage <ledger> <N> <role>
+   <tokens>` from the task result, and the BUDGET stop fires when the sum
+   crosses it; null disables.)
    (use the user's max_rounds and parallel_testers if they gave them; cap
    parallel_testers at 3 — each simulator wants 2-6GB of RAM). Also write
    `.qa-loop/.gitignore` containing exactly these five lines:
@@ -323,6 +328,8 @@ skew every metric downstream.
   open blockers AND no new blockers/majors this round (a round that spawned
   regressions is not "diminishing").
 - BACKSTOP: N == max_rounds. Hard stop regardless of state.
+- BUDGET: cumulative subagent tokens (set-usage) >= token_budget -> stop and
+  report. Evaluated right after CONVERGED.
 All metrics are computed over auto-routed findings only. Proposal-routed
 findings NEVER count toward convergence or thrashing — they are the human's
 decisions, and the loop must not deadlock on them.

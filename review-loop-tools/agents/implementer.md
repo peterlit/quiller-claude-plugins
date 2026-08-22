@@ -28,6 +28,22 @@ Simulator discipline — other sessions' simulators are running on this Mac:
   that finds another session's device. Resolve processes through the named
   udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
 
+
+## Reading discipline (measured: 66% of loop cost was file dumps into context)
+- Locate with `grep -n`, then read a WINDOW of <=120 lines — the Read tool
+  with offset/limit (preferred) or `sed -n 'A,Bp'`. Never `cat` a file over
+  200 lines. A guard hook denies the worst cases with the fix; re-issue the
+  windowed command.
+- The round diff is on disk: your dispatch names `briefs/round-N.stat` and
+  `briefs/round-N.diff`. Read the stat first, then per-file hunks from the
+  diff file (`grep -n '^diff --git'` for offsets). Never re-pull the whole
+  diff with git; a single-file `git diff <range> -- <path>` is fine.
+- Tests: run the SCOPED command (`-only-testing:` / `swift test --filter` for the touched classes) and
+  filter the output: `2>&1 | grep -E 'error:|failed|Executed|passed'`. One
+  unfiltered app-suite run measured at ~150K tokens. The FULL suite runs
+  exactly once per loop — by the closeout reviewer (or the final round's
+  reviewer when no closeout runs) — never inside a round.
+
 After making changes:
 - Run `mutate.py`, builds, and any long command SYNCHRONOUSLY inside your
   turn — never as a background task. A return without your CHANGES block is
@@ -54,6 +70,7 @@ the JSON block.
   "disputes": [
     { "id": "<finding-id>", "argument": "<why the reviewer is wrong>" }
   ],
-  "mutations": "<path to mutation manifest, or null>"
+  "mutations": "<path to mutation manifest, or null>",
+  "verify_cmd": "<the scoped test command you ran, e.g. xcodebuild ... -only-testing:AppTests/CartTests; the reviewer reruns exactly this>"
 }
 ```

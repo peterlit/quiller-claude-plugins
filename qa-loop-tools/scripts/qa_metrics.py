@@ -189,6 +189,11 @@ def main():
             region_thrash = not (healthy or converging_series(findings, N))
     any_reopened_twice = any(reopen_count(f) >= 2 for f in findings)
     promoted, demoted = promotions(findings, N)
+    usage = ledger.get("usage") or {}
+    round_tokens = sum((usage.get(str(N)) or {}).values())
+    cumulative_tokens = sum(sum(v.values()) for k, v in usage.items() if k.isdigit() and int(k) <= N)
+    budget = ledger.get("token_budget")
+    over_budget = bool(budget) and cumulative_tokens >= int(budget)
 
     # decision, in priority order
     if blockers_open == 0 and majors_open == 0 and not new_blocker_major:
@@ -196,6 +201,8 @@ def main():
             decision, reason = "converged", "no open blockers or majors; none newly introduced; confirmed on a full pass"
         else:
             decision, reason = "full_pass_required", "convergence signals on a targeted pass; confirm with a full pass"
+    elif over_budget:
+        decision, reason = "budget", f"cumulative {cumulative_tokens} tokens >= token_budget {budget}; stop, closeout, report"
     elif any_reopened_twice or (net_prev is not None and net <= 0 and net_prev <= 0
                                 and post_impl(N) and post_impl(N - 1)) or region_thrash:
         if blockers_open == 0 and closed > 0:
@@ -235,21 +242,22 @@ def main():
         "majors_open": majors_open, "minors_open": minors_open,
         "proposals_open": proposals_open, "closed": closed, "new": new,
         "reopened": reopened, "promoted": promoted, "demoted": demoted,
-        "net": net, "decision": decision, "reason": reason,
+        "net": net, "tokens": round_tokens, "cumulative_tokens": cumulative_tokens,
+        "decision": decision, "reason": reason,
     }
     if coverage is not None:
         verdict["coverage"] = coverage
 
     rounds_md = os.path.join(os.path.dirname(os.path.abspath(path)), "rounds.md")
-    header = "| Round | Pass | Blockers | Majors | Minors | Proposals | Closed | New | Reopened | Promoted | Net | Decision |\n"
-    sep = "|-------|------|----------|--------|--------|-----------|--------|-----|----------|----------|-----|----------|\n"
+    header = "| Round | Pass | Blockers | Majors | Minors | Proposals | Closed | New | Reopened | Promoted | Net | Tokens | Decision |\n"
+    sep = "|-------|------|----------|--------|--------|-----------|--------|-----|----------|----------|-----|--------|----------|\n"
     if not os.path.exists(rounds_md):
         with open(rounds_md, "w") as fh:
             fh.write(header + sep)
     with open(rounds_md, "a") as fh:
         fh.write(f"| {N} | {pass_type} | {blockers_open} | {majors_open} | "
                  f"{minors_open} | {proposals_open} | {closed} | {new} | "
-                 f"{reopened} | {promoted} | {net:+d} | {decision} |\n")
+                 f"{reopened} | {promoted} | {net:+d} | {round_tokens} | {decision} |\n")
 
     with open(os.path.join(os.path.dirname(os.path.abspath(path)),
                            "verdict.json"), "w") as fh:

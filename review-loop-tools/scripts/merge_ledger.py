@@ -8,6 +8,9 @@ Usage:
   merge_ledger.py open <ledger.json> [auto|proposal|all|closeout] [--region WF-n]
   merge_ledger.py archive <loop-dir> [name]
   merge_ledger.py scope <ledger.json> <range>
+  merge_ledger.py set-usage <ledger.json> <round> <role> <tokens>
+  merge_ledger.py diff <loop-dir> <round> <range>
+  merge_ledger.py next-round <loop-dir> <round> [--fragment F] [--sha S] [--pass full|targeted] [--phase-next NAME] [--brief-severity major|minor]
 
 Merge mode: the fragment is {"findings": [...]}. Existing findings are
 updated (scalar fields overwritten, evidence lists unioned, status_history
@@ -119,16 +122,17 @@ def set_round(args):
     with open(path, "w") as fh:
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
-    print(json.dumps(out))
+    if not getattr(set_round, "quiet", False):
+        print(json.dumps(out))
 
 def open_findings(args):
     usage = ("usage: merge_ledger.py open <ledger.json> "
-             "[auto|proposal|all|closeout] [--region WF-n ...]")
+             "[auto|proposal|all|closeout] [--region WF-n ...] [--severity major|minor]")
     if len(args) < 1:
         print(usage, file=sys.stderr)
         sys.exit(2)
     path = args[0]
-    routing, regions = "all", []
+    routing, regions, min_sev = "all", [], "minor"
     rest = list(args[1:])
     while rest:
         a = rest.pop(0)
@@ -137,8 +141,17 @@ def open_findings(args):
                 print(usage, file=sys.stderr)
                 sys.exit(2)
             regions.append(rest.pop(0))
+        elif a == "--severity":
+            if not rest:
+                print(usage, file=sys.stderr)
+                sys.exit(2)
+            min_sev = rest.pop(0)
         else:
             routing = a
+    rank = {"blocker": 3, "major": 2, "minor": 1}
+    if min_sev not in rank:
+        print("merge_ledger: --severity must be blocker|major|minor", file=sys.stderr)
+        sys.exit(1)
     if routing not in ("auto", "proposal", "all", "closeout"):
         print(f"merge_ledger: filter must be auto|proposal|all|closeout, "
               f"got '{routing}'", file=sys.stderr)
@@ -158,6 +171,8 @@ def open_findings(args):
             if not (f.get("introduced_by_fix") or f.get("severity") == "minor"):
                 continue
         elif routing != "all" and r != routing:
+            continue
+        if rank.get(f.get("severity"), 1) < rank[min_sev]:
             continue
         if regions:
             reg = str(f.get("region", ""))
@@ -181,6 +196,115 @@ def set_scope(args):
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
     print(json.dumps({"scope": args[1]}))
+
+def set_usage(args):
+    """Record a subagent's token count for a round (from the task result), so
+    rounds.md/report carry a Tokens column and token_budget can stop the loop."""
+    if len(args) < 4:
+        print("usage: merge_ledger.py set-usage <ledger.json> <round> <role> <tokens>",
+              file=sys.stderr)
+        sys.exit(2)
+    path, rnd, role = args[0], args[1], args[2]
+    try:
+        tokens = int(str(args[3]).replace(",", "").replace("_", ""))
+        int(rnd)
+    except ValueError:
+        print("merge_ledger: round and tokens must be integers", file=sys.stderr)
+        sys.exit(1)
+    with open(path) as fh:
+        ledger = json.load(fh)
+    bucket = ledger.setdefault("usage", {}).setdefault(str(int(rnd)), {})
+    bucket[role] = bucket.get(role, 0) + tokens
+    with open(path, "w") as fh:
+        json.dump(ledger, fh, indent=2)
+        fh.write("\n")
+    total = sum(sum(v.values()) for v in ledger["usage"].values())
+    print(json.dumps({"round": int(rnd), "role": role, "round_tokens": sum(bucket.values()),
+                      "cumulative": total, "token_budget": ledger.get("token_budget")}))
+
+def write_diff(args):
+    """Materialize the round diff ONCE so subagents read it from disk instead of
+    re-pulling it (measured: 21 git diff/show calls, 601K tokens, in one run)."""
+    import subprocess
+    if len(args) < 3:
+        print("usage: merge_ledger.py diff <loop-dir> <round> <range>", file=sys.stderr)
+        sys.exit(2)
+    loop, rnd, rng = args[0], args[1], args[2]
+    repo = os.path.dirname(os.path.abspath(loop))
+    os.makedirs(os.path.join(loop, "briefs"), exist_ok=True)
+    dpath = os.path.join(loop, "briefs", f"round-{rnd}.diff")
+    spath = os.path.join(loop, "briefs", f"round-{rnd}.stat")
+    with open(dpath, "w") as fh:
+        d = subprocess.run(["git", "-C", repo, "diff", rng], stdout=fh, stderr=subprocess.PIPE, text=True)
+    with open(spath, "w") as fh:
+        s = subprocess.run(["git", "-C", repo, "diff", "--stat", rng], stdout=fh, stderr=subprocess.PIPE, text=True)
+    if d.returncode or s.returncode:
+        print(f"merge_ledger: git diff failed: {(d.stderr or s.stderr).strip()}", file=sys.stderr)
+        sys.exit(1)
+    lines = sum(1 for _ in open(dpath))
+    print(json.dumps({"diff": dpath, "stat": spath, "range": rng, "diff_lines": lines}))
+
+def next_round(args):
+    """One call for the end-of-round plumbing: merge the fragment, run metrics,
+    and — if the verdict is continue — advance: set-round N+1, write the
+    implementer brief, set the phase marker. Without --fragment it only
+    advances (use after the seed). Prints one summary line."""
+    import subprocess
+    if len(args) < 2:
+        print("usage: merge_ledger.py next-round <loop-dir> <round> [--fragment F] [--sha S] "
+              "[--pass full|targeted] [--phase-next NAME] [--brief-severity major|minor]",
+              file=sys.stderr)
+        sys.exit(2)
+    loop, rnd = args[0], int(args[1])
+    opt = {"--fragment": None, "--sha": None, "--pass": "full",
+           "--phase-next": None, "--brief-severity": "major"}
+    i = 2
+    while i < len(args):
+        if args[i] in opt and i + 1 < len(args):
+            opt[args[i]] = args[i + 1]; i += 2
+        else:
+            i += 1
+    ledger_path = os.path.join(loop, "ledger.json")
+    here = os.path.dirname(os.path.abspath(__file__))
+    is_qa = os.path.basename(os.path.abspath(loop)) == ".qa-loop" or os.path.exists(os.path.join(here, "qa_metrics.py")) and not os.path.exists(os.path.join(here, "metrics.py"))
+    out = {"round": rnd}
+    if opt["--fragment"]:
+        m = subprocess.run([sys.executable, os.path.abspath(__file__), ledger_path, opt["--fragment"], str(rnd)],
+                           capture_output=True, text=True)
+        if m.returncode:
+            print(m.stderr.strip(), file=sys.stderr); sys.exit(1)
+        out["merged"] = json.loads(m.stdout)
+        metrics = os.path.join(here, "qa_metrics.py" if is_qa else "metrics.py")
+        cmd = [sys.executable, metrics, ledger_path, str(rnd)] + ([opt["--pass"]] if is_qa else [])
+        v = subprocess.run(cmd, capture_output=True, text=True)
+        if v.returncode:
+            print(v.stderr.strip(), file=sys.stderr); sys.exit(1)
+        verdict = json.loads(v.stdout)
+        out["decision"], out["reason"] = verdict["decision"], verdict["reason"]
+        out["open"] = {k: verdict[k] for k in ("blockers_open", "majors_open", "minors_open") if k in verdict}
+        if verdict["decision"] != "continue":
+            print(json.dumps(out)); return
+    nxt = rnd + 1
+    sha = opt["--sha"]
+    if not sha:
+        r = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(loop)), "rev-parse", "HEAD"],
+                           capture_output=True, text=True)
+        sha = r.stdout.strip() if r.returncode == 0 else None
+    set_round.quiet = True
+    set_round([ledger_path, str(nxt)] + ([sha] if sha else []))
+    set_round.quiet = False
+    os.makedirs(os.path.join(loop, "briefs"), exist_ok=True)
+    brief = os.path.join(loop, "briefs", f"round-{nxt}-brief.json")
+    b = subprocess.run([sys.executable, os.path.abspath(__file__), "open", ledger_path, "auto",
+                        "--severity", opt["--brief-severity"]], capture_output=True, text=True)
+    with open(brief, "w") as fh:
+        fh.write(b.stdout)
+    phase = opt["--phase-next"] or (f"round-{nxt}-testing" if is_qa else f"round-{nxt}-implementing")
+    with open(os.path.join(loop, ".phase"), "w") as fh:
+        fh.write(phase + "\n")
+    out.update({"next_round": nxt, "sha": sha, "brief": brief,
+                "brief_findings": len(json.loads(b.stdout).get("findings", [])), "phase": phase})
+    print(json.dumps(out))
 
 def archive(args):
     import datetime, shutil
@@ -229,7 +353,8 @@ def archive(args):
 
 def main():
     verbs = {"resolve": resolve, "set-round": set_round,
-             "open": open_findings, "archive": archive, "scope": set_scope}
+             "open": open_findings, "archive": archive, "scope": set_scope,
+             "set-usage": set_usage, "diff": write_diff, "next-round": next_round}
     if len(sys.argv) >= 2 and sys.argv[1] in verbs:
         verbs[sys.argv[1]](sys.argv[2:])
         return

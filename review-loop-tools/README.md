@@ -89,6 +89,20 @@ implementer names in its CHANGES block — so "8/8 mutants killed" is
 verified, not trusted. The trend table also gains a Promoted column so a
 severity promotion on new evidence no longer looks like a regression.
 
+## Measured cost controls (0.7.0)
+
+Two instrumented studies showed the loop's cost is tool output written into
+context (66%) and orchestrator turns in large sessions (3.3×), not model
+reasoning. 0.7.0 acts on that: a `read_guard` hook denies whole-file dumps,
+unfiltered test runs, and whole-diff re-pulls during a loop (with the fix in
+its message); the round diff is materialized once (`diff` verb); rounds run
+the implementer's scoped `verify_cmd` and the full suite runs once at
+closeout; `next-round` folds merge + metrics + advance into one turn and an
+Agent-tool hook stamps `:dispatched`; a `session_guard` hook warns when a
+loop is started in a large session; minors skip rounds and go to closeout;
+scope mode defaults to 2 rounds with blocker escalation; `set-usage` records
+per-round tokens for a Tokens column and an optional `token_budget` stop.
+
 ## Optional commit guard
 
 A `PreToolUse` hook (`scripts/commit_guard.sh`) can block oversized or
