@@ -35,7 +35,7 @@ disagreements), **diminishing** (returns too small to continue), **backstop**
 
 Optionally tell it a max round count (default 5). At the end it writes
 `.review-loop/REPORT.md` with the stop condition, trend table, open/disputed
-findings, and a HUMAN SKIM LIST.
+findings, and a WATCH LIST.
 
 ## Loop state
 
@@ -119,5 +119,5 @@ committed):
 
 Because the implementer and reviewer are the same model family, the loop
 **cannot catch both agents agreeing on a wrong fix**. A human should skim the
-report's **HUMAN SKIM LIST** — the 3–5 most invasive diffs across all rounds —
+report's **WATCH LIST** — the seed scope, each round's largest diffs, and every trap-flagged or rejected finding —
 before trusting the result.
