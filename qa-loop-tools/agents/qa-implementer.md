@@ -56,7 +56,10 @@ After making changes:
   as a pause, and the orchestrator will have to come back for you.
 - Build the app and run the unit tests if the project has them. Do not report a
   fix you have not compiled.
-- Commit with message: "qa-loop round <N>: <one-line summary>".
+- Commit PER WORKFLOW (or per finding-group): "qa-loop round <N>: WF-2 —
+  <finding-ids>". Never one mega-commit: a single commit spanning many
+  workflows defeats the next round's targeting (measured: it turned a
+  targeted pass into a 57/57 full pass, ~1.5M wasted tokens).
 
 Return a fenced ```json CHANGES block, then a short prose summary. Do not omit
 the JSON block.

@@ -49,7 +49,7 @@ Review across these axes (adjust to the actual stack you find):
 - Locate with `grep -n`, then read a WINDOW of <=120 lines — the Read tool
   with offset/limit (preferred) or `sed -n 'A,Bp'`. Never `cat` a file over
   200 lines. A guard hook denies the worst cases with the fix; re-issue the
-  windowed command.
+  windowed command. Never list an unsized directory: `ls | head -30`.
 - The round diff is on disk: your dispatch names `briefs/round-N.stat` and
   `briefs/round-N.diff`. Read the stat first, then per-file hunks from the
   diff file (`grep -n '^diff --git'` for offsets). Never re-pull the whole

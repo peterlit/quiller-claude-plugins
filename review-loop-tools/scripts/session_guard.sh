@@ -14,7 +14,7 @@ try:
 except Exception:
     sys.exit(0)
 prompt = d.get("prompt", "") or ""
-if not re.search(r"review-loop|qa-loop", prompt):
+if not re.search(r"review[- ]loop|qa[- ]loop", prompt, re.I):
     sys.exit(0)
 tp = d.get("transcript_path", "") or ""
 size = os.path.getsize(tp) if tp and os.path.exists(tp) else 0

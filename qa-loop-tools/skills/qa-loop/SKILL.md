@@ -52,6 +52,10 @@ subagents. You are PLUMBING ONLY.
   screenshots, taps, or launches from you. Preflight interactions happen
   strictly BEFORE dispatch; evidence gathering is the tester's job. A stray
   orchestrator tap or screenshot races the tester and corrupts its pass.
+- NEVER override an agent's pinned model in a dispatch (the Agent tool's
+  model parameter): pins carry the loop's diversity guarantees and keep
+  run-to-run cost numbers comparable (a measured run mixed models and its
+  per-dispatch comparisons were void).
 - Dispatch subagents in the FOREGROUND (run_in_background: false) and wait for
   the result — a visible in-progress dispatch beats an ended turn that looks
   dead. NEVER end your turn while a dispatch is pending or merely promised. If
@@ -77,9 +81,12 @@ tester rebuild a driver from scratch.
 0. If `.qa-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
    `.phase` says done), archive it first:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py archive .qa-loop`
-   WORKFLOWS.md, TESTCASES.md, HARNESS_NOTES.md, and evidence/ stay in place
-   — they carry across loops; the per-run state moves to
-   `.qa-loop/archive/<timestamp-sha>/`.
+   WORKFLOWS.md, TESTCASES.md, HARNESS_NOTES.md, evidence/, and tools/ stay
+   in place — they carry across loops (tools/ holds the testers' reusable
+   rigs; never delete it); the per-run state moves to
+   `.qa-loop/archive/<timestamp-sha>/`, unknown legacy top-level files to
+   its legacy/. Then rotate the notes:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py notes-rotate .qa-loop`
 1. If `.qa-loop/ledger.json` doesn't exist, create it with:
    `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "token_budget": null, "implemented_rounds": [], "findings": [] }`
    (token_budget: a hard ceiling on cumulative subagent tokens — record each
@@ -125,10 +132,19 @@ tester rebuild a driver from scratch.
    case (a real 40-case pass has run ~28 min / ~215K tokens), and state
    "expect a full pass of ≈X-Y minutes / ≈Z tokens, up to <max_rounds>
    rounds." After round 1 completes, re-announce the ACTUAL round-1 numbers
-   so the human can trim max_rounds with real data.
+   so the human can trim max_rounds with real data. Also recommend a
+   token_budget — roughly the full-pass estimate × max_rounds + 50% — and
+   set it unless the human declines: an unset budget leaves the ceiling to
+   operator vigilance (note: set-usage records harness-reported task tokens,
+   a directional floor of billed cost — budget on that scale).
    When they respond, RE-READ the file (they may have edited it directly) and
    reconcile their feedback before proceeding. Do not start testing without
    this sign-off.
+4. AUDIT the contract: dispatch `fix-reviewer` in AUDIT mode with
+   WORKFLOWS.md and the audit path `.qa-loop/briefs/workflows-audit.md`.
+   Reconcile every contradiction into the doc (flag material ones to the
+   human). Cheap insurance: the doc is the loop's single point of failure,
+   and nothing else in the loop checks it.
 In later rounds you may update WORKFLOWS.md when app functionality changes, but
 material edits are FLAGGED in the report — never re-gated on the human.
 
@@ -148,7 +164,11 @@ update between dispatches ("WF-4/12 explored, 2 candidate concerns"). Never send
 single dispatch — a monolithic pass runs silently for tens of minutes and can
 exhaust the tester's context with screenshots before it writes anything.
 In later rounds, refresh only the test cases for workflows whose screens
-changed.
+changed. When TESTCASES.md is complete, LINT it:
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan_round.py .qa-loop 0 full --lint`
+must pass (persona tags on every case, a [smoke] set, paths() lines) — a
+mis-formatted file otherwise runs silently on empty data (measured: 51
+cases ran with no persona/smoke tags and nothing warned).
 
 Exploration output is TEST CASES plus HYPOTHESES. Anything that looked wrong
 during exploration is recorded in a "Candidate concerns" section of
@@ -171,7 +191,13 @@ skew every metric downstream.
    cases for the perf lane, and writes `.qa-loop/briefs/round-<N>-plan.json`.
    If it reports `unmapped_workflows` on a targeted pass, add their
    `paths(...)` lines to WORKFLOWS.md and re-plan.
-4. Write "round-<N>-testing" to `.qa-loop/.phase` and run the FUNCTIONAL LANE.
+4. Before dispatching: if HARNESS_NOTES.md exceeds ~10KB, rotate it —
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py notes-rotate .qa-loop`
+   — and if still over, trim the general sections yourself, archiving what
+   you cut. Do NOT dispatch above the ceiling: every tester pays for every
+   byte on every request (measured: an 86KB file was ~30% of per-request
+   cost). Each chunk dispatch carries its manifest's turn_budget.
+   Write "round-<N>-testing" to `.qa-loop/.phase` and run the FUNCTIONAL LANE.
    One dispatch per chunk manifest in the plan. Every chunk dispatch
    carries: its manifest's test cases, ONLY its workflows' findings —
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py open .qa-loop/ledger.json auto --region <WF-n from the manifest> > .qa-loop/briefs/round-<N>-<slug>-findings.json`
@@ -256,7 +282,8 @@ skew every metric downstream.
         `qa-implementer` with the OPEN auto-routed findings (including any
         whose note says FIX REJECTED — the rejection reason is part of its
         brief), their fix_risk flags and constraints, the testers' summaries,
-        and the evidence paths. Wait for its CHANGES block, confirm it
+        and the evidence paths. It commits PER WORKFLOW — the next round's
+        targeting depends on it. Wait for its CHANGES block, confirm it
         committed, then append N to ledger.json's top-level
         implemented_rounds array — the metrics use it to tell
         post-implementation rounds from discovery rounds.

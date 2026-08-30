@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_stamp.sh .qa-loop"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_stamp.sh .qa-loop 2"
           }
         ]
       }

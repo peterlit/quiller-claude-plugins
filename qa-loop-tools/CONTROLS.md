@@ -50,8 +50,24 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   (`set-usage`) from the task results; `rounds.md` gains a Tokens column,
   and the BUDGET stop fires (closeout + report) when the sum crosses the
   ceiling.
-  *In practice:* set it to what the Stage-1 estimate quoted plus margin; the
-  report then shows exactly where the money went.
+  Scale caveat: the harness-reported figure is roughly the agent's final
+  context — a directional floor, NOT billed effective cost (measured: 514K
+  reported vs 2.79M effective). Budget on the reported scale.
+  *In practice:* the qa gate now recommends a value (estimate × rounds
+  +50%); accept it unless you have a reason not to.
+- **`HARNESS_NOTES.md` policy** `[qa]` — ~10KB ceiling, enforced before
+  dispatch: `notes-rotate` archives `## Chunk`/`## Round` sections at loop
+  end and on demand; general sections carry across. Measured: cutting the
+  file from 86KB to 6.9KB was worth 34% of per-request cost, and it regrew
+  to 22KB in one round — this needs policy, not manual cuts.
+- **`.qa-loop/tools/`** `[qa]` — the testers' reusable rigs (image diff,
+  crop, save injection) live here, indexed in the notes, committed, never
+  deleted by provisioning. Measured: without it, three image-diff tools were
+  built independently in one round (est. 2–4M per full pass).
+- **Turn budgets** `[qa]` — every chunk manifest carries `turn_budget`
+  (default 40): at the budget the tester files what it has and returns; a
+  continuation picks up the rest. Cost tracks turns × context, not test-case
+  count (3 cases measured at 2.05M vs 3 other cases at 0.20M).
 - **`parallel_testers`** `[qa]` (default 1, cap 3) — runs test passes across
   N isolated worker simulators. Functional checks parallelize; performance
   measurement always runs on one uncontended simulator (the perf lane). Cuts

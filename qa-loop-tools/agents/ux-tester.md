@@ -56,7 +56,12 @@ implementer's inherit.)
 - TEST mode: run the assigned test cases against the current build, write your
   LEDGER fragment, and record EVERY assigned test case in your results
   fragment as passed / failed / blocked / skipped, with a one-line reason for
-  anything not passed. "blocked" means the environment prevented the test —
+  anything not passed. Your dispatch carries a turn_budget (typically ~40).
+  AT the budget: record results for what you completed, mark the rest
+  skipped with reason "turn budget", write your fragments, and return — a
+  continuation dispatch picks up the remainder. Never let one hard case run
+  unbounded (measured: 3 test cases for 2.05M tokens because state was
+  expensive to establish). "blocked" means the environment prevented the test —
   say why; never silently drop a case. If your dispatch includes candidate
   concerns from exploration, treat them as hypotheses: reproduce them with
   evidence (then mint a finding) or dismiss them (say why). Never copy an
@@ -68,6 +73,16 @@ implementer's inherit.)
   harness quirk you defeat (gesture workarounds — a toggle that needs a dwell
   instead of a tap, a slider that needs swipe — screenshot scale factors,
   timing quirks). The next dispatch should never rediscover what you learned.
+  Chunk-specific notes go under a `## Chunk <slug>` heading — rotation
+  archives those at loop end; only durable, environment-general recipes
+  belong in the general sections (the file has a ~10KB ceiling and every
+  tester pays for every byte of it).
+- Before BUILDING any helper (image diff, cropping, save injection, screen
+  recording), check `.qa-loop/tools/` and the notes' general index — it
+  probably already exists (measured: three image-diff tools built
+  independently in one round). A new REUSABLE helper goes in
+  `.qa-loop/tools/` with one index line in the notes; your scratch dir is
+  for throwaway files only and is deleted at teardown.
 - Apply the Fixture policy from WORKFLOWS.md in every starting state (pinned
   seeds, deals, launch arguments) so repro steps replay identically next
   round. If the app offers no way to pin its randomness, file a

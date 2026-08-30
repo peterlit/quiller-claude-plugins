@@ -228,7 +228,7 @@ def main():
 
     def numstat(rng):
         try:
-            ns = subprocess.run(["git", "-C", repo, "diff", "--numstat", rng],
+            ns = subprocess.run(["git", "-C", repo, "diff", "--numstat"] + rng.split(),
                                 capture_output=True, text=True, timeout=30)
         except Exception:
             return None

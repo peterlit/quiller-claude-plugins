@@ -33,14 +33,19 @@ def main():
     if len(a) < 3 or a[2] not in ("full", "targeted"):
         print(__doc__, file=sys.stderr); sys.exit(2)
     loop, rnd, pass_type = a[0], int(a[1]), a[2]
-    opt = {"--range": None, "--workers": "1", "--max-tcs": "5", "--repo": "."}
+    opt = {"--range": None, "--workers": "1", "--max-tcs": "5", "--repo": ".",
+           "--turn-budget": "40"}
+    flags = {"--lint": False, "--lax": False, "--allow-wide": False}
     i = 3
     while i < len(a):
         if a[i] in opt and i + 1 < len(a):
             opt[a[i]] = a[i + 1]; i += 2
+        elif a[i] in flags:
+            flags[a[i]] = True; i += 1
         else:
             i += 1
     workers, max_tcs = int(opt["--workers"]), int(opt["--max-tcs"])
+    turn_budget = int(opt["--turn-budget"])
 
     tcs = []
     for line in open(os.path.join(loop, "TESTCASES.md"), encoding="utf-8"):
@@ -62,6 +67,33 @@ def main():
             m = PATHS_RE.match(line)
             if m:
                 wf_paths[m.group(1)] = [p.strip() for p in m.group(2).split(",") if p.strip()]
+
+    # Contract lint — three silent failures were measured in the field: a
+    # pre-format TESTCASES.md matched the id regex by luck and ran with no
+    # persona/smoke data at all; nothing warned.
+    problems = []
+    untagged = [t["tc"] for t in tcs if t["personas"] == ["unspecified"]]
+    if untagged:
+        problems.append(f"{len(untagged)} test case(s) missing [novice]/[power] tags: "
+                        + ", ".join(untagged[:6]) + ("…" if len(untagged) > 6 else ""))
+    unmapped_all = sorted({t["wf"] for t in tcs} - set(wf_paths))
+    if pass_type == "targeted" and unmapped_all:
+        problems.append("workflows without a paths() line (targeting is blind to them): "
+                        + ", ".join(unmapped_all))
+    if not any(t["smoke"] for t in tcs):
+        problems.append("no [smoke]-tagged test cases — targeted passes lose their regression floor")
+    if flags["--lint"]:
+        print(json.dumps({"ok": not problems, "problems": problems, "tcs": len(tcs),
+                          "workflows": len({t["wf"] for t in tcs}),
+                          "smoke": sum(1 for t in tcs if t["smoke"]),
+                          "perf": sum(1 for t in tcs if t["perf"])}, indent=2))
+        sys.exit(0 if not problems else 1)
+    if problems and not flags["--lax"]:
+        for pr in problems:
+            print("plan_round: " + pr, file=sys.stderr)
+        print("plan_round: fix TESTCASES.md / WORKFLOWS.md (see the skill's contracts) "
+              "or pass --lax", file=sys.stderr)
+        sys.exit(1)
 
     ledger = json.load(open(os.path.join(loop, "ledger.json")))
     finding_tcs, finding_wfs = set(), set()
@@ -89,11 +121,23 @@ def main():
     if pass_type == "full":
         selected = tcs
         why = "full pass"
+        degenerated = False
     else:
         selected = [t for t in tcs if t["smoke"] or t["tc"] in finding_tcs
                     or t["wf"] in finding_wfs or t["wf"] in touched_wfs]
         why = (f"targeted: {len(changed)} changed files touch {sorted(touched_wfs)}; "
                f"open findings reference {sorted(finding_tcs | finding_wfs)}; smoke set included")
+        # Degenerate-targeting guard: one broad commit touching most workflows
+        # turns "targeted" into a full pass in disguise (measured: 57/57
+        # selected, ~1.5M wasted). Fall back to findings + smoke.
+        degenerated = False
+        if not flags["--allow-wide"] and tcs and len(selected) > 0.6 * len(tcs):
+            selected = [t for t in tcs if t["smoke"] or t["tc"] in finding_tcs
+                        or t["wf"] in finding_wfs]
+            degenerated = True
+            why += (f"; DEGENERATED: diff touched >60% of test cases — reduced to "
+                    f"findings+smoke ({len(selected)}). Prefer per-workflow commits; "
+                    f"--allow-wide overrides.")
 
     by_wf = {}
     for t in selected:
@@ -107,6 +151,7 @@ def main():
             worker = f"qa-worker-{k % workers + 1}" if workers > 1 else "main"
             chunks.append({
                 "slug": slug, "worker": worker, "lane": "functional",
+                "turn_budget": turn_budget,
                 "tcs": [t["tc"] for t in part],
                 "personas": sorted({p for t in part for p in t["personas"]}),
                 "region_filter": [wf],
@@ -118,7 +163,7 @@ def main():
     perf = [t["tc"] for t in selected if t["perf"]]
     n = len(selected)
     plan = {
-        "round": rnd, "pass_type": pass_type, "why": why,
+        "round": rnd, "pass_type": pass_type, "why": why, "degenerated": degenerated,
         "selected": n, "total": len(tcs), "workers": workers, "max_tcs": max_tcs,
         "chunks": chunks,
         "perf_lane": {"tcs": perf, "fragment": f"{loop}/fragments/round-{rnd}-perf.json",

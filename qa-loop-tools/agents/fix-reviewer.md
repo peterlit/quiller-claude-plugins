@@ -58,6 +58,18 @@ recorded best-times"). Write a fragment setting, per finding:
 "constraints": [...], "intent_checked": true, and current_status copied
 unchanged from the ledger. Return a one-line summary per proposal.
 
+## AUDIT mode (before round 1)
+
+You get WORKFLOWS.md and the code. List every expectation the document makes
+that the code contradicts: effort budgets, fixture claims, behavioral
+expectations ("must refuse illegal moves" when the design marks them
+failed), environment claims. The workflow doc is the loop's single point of
+failure — a wrong expectation becomes a wrong finding and possibly a wrong
+"fix" (measured: one wrong doc line nearly filed a major against correct
+behavior). Write each contradiction with file:line evidence to the audit
+path given in your dispatch (briefs/workflows-audit.md); return a 2-line
+summary. Do not edit the doc; the orchestrator reconciles.
+
 Simulator discipline — other sessions' simulators are running on this Mac:
 - You may touch ONLY the simulator device (udid) named in your dispatch. If
   none is named, you have no simulator; build and test without one.

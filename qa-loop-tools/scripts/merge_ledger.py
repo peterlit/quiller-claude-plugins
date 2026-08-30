@@ -177,7 +177,10 @@ def open_findings(args):
         if regions:
             reg = str(f.get("region", ""))
             tc = str(f.get("test_case", ""))
-            if not any(reg.startswith(x) or tc.startswith(x.replace("WF-", "TC-") + ".")
+            # Boundary match: WF-1 must NOT match WF-10..WF-19 (measured: a
+            # prefix match made every chunk brief up to 7x too big).
+            if not any(reg == x or reg.startswith(x + ":") or reg.startswith(x + "/")
+                       or tc.startswith(x.replace("WF-", "TC-") + ".")
                        for x in regions):
                 continue
         sel.append({k: v for k, v in f.items() if k != "status_history"})
@@ -191,7 +194,7 @@ def set_scope(args):
         sys.exit(2)
     with open(args[0]) as fh:
         ledger = json.load(fh)
-    ledger["scope"] = args[1]
+    ledger["scope"] = " ".join(args[1:])
     with open(args[0], "w") as fh:
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
@@ -199,7 +202,10 @@ def set_scope(args):
 
 def set_usage(args):
     """Record a subagent's token count for a round (from the task result), so
-    rounds.md/report carry a Tokens column and token_budget can stop the loop."""
+    rounds.md/report carry a Tokens column and token_budget can stop the loop.
+    NOTE the scale: the harness-reported figure is roughly the agent's final
+    context size — a directional FLOOR, not billed effective cost (measured:
+    514K reported vs 2.79M effective). Set token_budget on the same scale."""
     if len(args) < 4:
         print("usage: merge_ledger.py set-usage <ledger.json> <round> <role> <tokens>",
               file=sys.stderr)
@@ -222,6 +228,41 @@ def set_usage(args):
     print(json.dumps({"round": int(rnd), "role": role, "round_tokens": sum(bucket.values()),
                       "cumulative": total, "token_budget": ledger.get("token_budget")}))
 
+def notes_rotate(args):
+    """Rotate HARNESS_NOTES.md: chunk/round sections move to the archive,
+    general sections stay. Measured: the file regrew 6.9KB -> 22KB in one
+    round; at 86KB it cost ~21K tokens per dispatch and misled testers."""
+    import datetime
+    if len(args) < 1:
+        print("usage: merge_ledger.py notes-rotate <loop-dir>", file=sys.stderr)
+        sys.exit(2)
+    loop = args[0]
+    p = os.path.join(loop, "HARNESS_NOTES.md")
+    if not os.path.exists(p):
+        print(json.dumps({"rotated_sections": 0, "kept_bytes": 0}))
+        return
+    import re as _re
+    with open(p, encoding="utf-8") as fh:
+        text = fh.read()
+    parts = _re.split(r"(?m)^(?=## )", text)
+    keep, drop = [], []
+    for i, sec in enumerate(parts):
+        head = sec.splitlines()[0] if sec else ""
+        if i > 0 and _re.search(r"(?i)\b(round|chunk|wave|dispatch)\b|round-\d", head):
+            drop.append(sec)
+        else:
+            keep.append(sec)
+    if drop:
+        os.makedirs(os.path.join(loop, "archive"), exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        with open(os.path.join(loop, "archive", f"harness-notes-{stamp}.md"), "w") as fh:
+            fh.write("".join(drop))
+        with open(p, "w") as fh:
+            fh.write("".join(keep))
+    size = os.path.getsize(p)
+    print(json.dumps({"rotated_sections": len(drop), "kept_bytes": size,
+                      "over_ceiling": size > 10240}))
+
 def write_diff(args):
     """Materialize the round diff ONCE so subagents read it from disk instead of
     re-pulling it (measured: 21 git diff/show calls, 601K tokens, in one run)."""
@@ -230,14 +271,15 @@ def write_diff(args):
         print("usage: merge_ledger.py diff <loop-dir> <round> <range>", file=sys.stderr)
         sys.exit(2)
     loop, rnd, rng = args[0], args[1], args[2]
+    extra = args[3:]   # pathspecs, e.g. -- ':!prompts.md' to keep logs out of scope
     repo = os.path.dirname(os.path.abspath(loop))
     os.makedirs(os.path.join(loop, "briefs"), exist_ok=True)
     dpath = os.path.join(loop, "briefs", f"round-{rnd}.diff")
     spath = os.path.join(loop, "briefs", f"round-{rnd}.stat")
     with open(dpath, "w") as fh:
-        d = subprocess.run(["git", "-C", repo, "diff", rng], stdout=fh, stderr=subprocess.PIPE, text=True)
+        d = subprocess.run(["git", "-C", repo, "diff", rng] + extra, stdout=fh, stderr=subprocess.PIPE, text=True)
     with open(spath, "w") as fh:
-        s = subprocess.run(["git", "-C", repo, "diff", "--stat", rng], stdout=fh, stderr=subprocess.PIPE, text=True)
+        s = subprocess.run(["git", "-C", repo, "diff", "--stat", rng] + extra, stdout=fh, stderr=subprocess.PIPE, text=True)
     if d.returncode or s.returncode:
         print(f"merge_ledger: git diff failed: {(d.stderr or s.stderr).strip()}", file=sys.stderr)
         sys.exit(1)
@@ -345,6 +387,18 @@ def archive(args):
             os.makedirs(dest, exist_ok=True)
             shutil.move(src, os.path.join(dest, item))
             moved.append(item)
+    # Sweep unknown top-level FILES (legacy REPORT-*.md, stray fragments…)
+    # into legacy/ — every loop run pays to `ls` whatever is left here.
+    KEEP = {"WORKFLOWS.md", "TESTCASES.md", "HARNESS_NOTES.md", "BACKLOG.md",
+            ".gitignore", "archive", "evidence", "tools", "driver", "scratch",
+            "notes"}
+    for entry in sorted(os.listdir(loop_dir)):
+        src = os.path.join(loop_dir, entry)
+        if entry in KEEP or not os.path.isfile(src):
+            continue
+        os.makedirs(os.path.join(dest, "legacy"), exist_ok=True)
+        shutil.move(src, os.path.join(dest, "legacy", entry))
+        moved.append(f"legacy/{entry}")
     if not moved:
         print(f"merge_ledger: nothing to archive in {loop_dir}",
               file=sys.stderr)
@@ -354,7 +408,8 @@ def archive(args):
 def main():
     verbs = {"resolve": resolve, "set-round": set_round,
              "open": open_findings, "archive": archive, "scope": set_scope,
-             "set-usage": set_usage, "diff": write_diff, "next-round": next_round}
+             "set-usage": set_usage, "diff": write_diff, "next-round": next_round,
+             "notes-rotate": notes_rotate}
     if len(sys.argv) >= 2 and sys.argv[1] in verbs:
         verbs[sys.argv[1]](sys.argv[2:])
         return

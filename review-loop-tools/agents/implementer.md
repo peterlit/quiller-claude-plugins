@@ -33,7 +33,7 @@ Simulator discipline — other sessions' simulators are running on this Mac:
 - Locate with `grep -n`, then read a WINDOW of <=120 lines — the Read tool
   with offset/limit (preferred) or `sed -n 'A,Bp'`. Never `cat` a file over
   200 lines. A guard hook denies the worst cases with the fix; re-issue the
-  windowed command.
+  windowed command. Never list an unsized directory: `ls | head -30`.
 - The round diff is on disk: your dispatch names `briefs/round-N.stat` and
   `briefs/round-N.diff`. Read the stat first, then per-file hunks from the
   diff file (`grep -n '^diff --git'` for offsets). Never re-pull the whole
@@ -48,7 +48,12 @@ After making changes:
 - Run `mutate.py`, builds, and any long command SYNCHRONOUSLY inside your
   turn — never as a background task. A return without your CHANGES block is
   read as a pause, and the orchestrator will have to come back for you.
-- Build and run tests. Do not report a fix you have not compiled.
+- Build and run tests. Do not report a fix you have not compiled. A NEW
+  test is verified by running its CLASS
+  (`-only-testing:Target/ClassHoldingTheNewTest`), never a file-named
+  bundle — a file-scoped run silently skips the class inside it (a measured
+  seed blocker shipped exactly this way). Your verify_cmd must name that
+  class.
 - If you mutation-test your tests, make the claim CHECKABLE: write a
   manifest to `.review-loop/briefs/round-<N>-mutants.json` —
   `{"test_cmd": "...", "mutants": [{"id", "file", "original", "replacement",

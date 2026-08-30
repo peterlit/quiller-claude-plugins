@@ -34,6 +34,9 @@ You orchestrate an iterative review loop between the `implementer` and
   use `…:waiting:<reason>` (see Waiting, failures, and pauses).
 - All loop state lives in the TARGET REPO at `.review-loop/`. Never write it into
   the plugin directory.
+- NEVER override an agent's pinned model in a dispatch (the Agent tool's
+  model parameter): pins carry the diversity guarantees and keep run-to-run
+  cost numbers comparable.
 - If the project is an app that runs in a simulator, name ONE device udid in
   every dispatch (boot it yourself first). Agents may touch only that device
   — other sessions' simulators share this Mac.
@@ -44,7 +47,9 @@ You orchestrate an iterative review loop between the `implementer` and
    rounds). A hook reports this session's transcript size when the loop is
    invoked; if it warned, tell the human and recommend restarting the loop
    in a new session before doing anything else. Proceed only if they accept
-   the cost.
+   the cost. (Enforced: the first loop dispatch is blocked by a hook when
+   the transcript is oversized and no `briefs/.session-ok` marker exists —
+   ask the human, then either restart fresh or create the marker.)
 1. If `.review-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
    `.phase` says done), archive it before anything else:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py archive .review-loop`
@@ -71,7 +76,10 @@ You orchestrate an iterative review loop between the `implementer` and
    seed merged as round 1 poisons the net metric (N new, 0 closed) and makes
    a converging run look like thrashing. Three seed modes, in priority order:
    - SCOPE: the user named a change under review (a sha range, a diff file,
-     or a PR) — record it first,
+     or a PR). The range may carry pathspec excludes — e.g.
+     `main..HEAD -- ':!prompts.md'` — keep pasted logs and prompt journals
+     out of reviewed scope (measured: 816 of 1,439 seed lines were a pasted
+     crash report). Record it first,
      `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py scope .review-loop/ledger.json <a..b>`
      (render_report lists the scope diff as the FIRST watch-list candidate —
      it is where the findings actually live), then dispatch
@@ -218,7 +226,8 @@ merge_ledger.py's verbs:
 - archive:   `merge_ledger.py archive .review-loop [name]`
 - scope:     `merge_ledger.py scope <ledger> <a..b>` (the change under review; first watch-list candidate)
 - diff:      `merge_ledger.py diff <loop-dir> <N> <a..b>` (materialize the round diff + stat for subagents)
-- set-usage: `merge_ledger.py set-usage <ledger> <N> <role> <tokens>` (Tokens column; feeds token_budget)
+- set-usage: `merge_ledger.py set-usage <ledger> <N> <role> <tokens>` (Tokens column; feeds token_budget —
+  the harness-reported figure is a directional FLOOR (~final context), not billed cost; budget on that scale)
 - next-round:`merge_ledger.py next-round <loop-dir> <N> [--fragment F]` (merge + metrics + advance, one turn)
 The CHANGES block carries `verify_cmd` (scoped tests the reviewer reruns).
 Hooks active during a loop: `read_guard` denies whole-file dumps,
