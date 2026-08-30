@@ -38,7 +38,7 @@ coverage.json, fragments/, briefs/, .phase) into <loop-dir>/archive/<name>/,
 so a fresh loop starts clean instead of piling files at one level. Default
 name: timestamp plus the ledger's sha.
 """
-import json, os, sys
+import json, os, shlex, sys
 
 VALID_STATUS = {"open", "partial", "fixed", "wontfix", "disputed"}
 
@@ -194,7 +194,7 @@ def set_scope(args):
         sys.exit(2)
     with open(args[0]) as fh:
         ledger = json.load(fh)
-    ledger["scope"] = " ".join(args[1:])
+    ledger["scope"] = " ".join(shlex.split(" ".join(args[1:])))
     with open(args[0], "w") as fh:
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
@@ -204,8 +204,8 @@ def set_usage(args):
     """Record a subagent's token count for a round (from the task result), so
     rounds.md/report carry a Tokens column and token_budget can stop the loop.
     NOTE the scale: the harness-reported figure is roughly the agent's final
-    context size — a directional FLOOR, not billed effective cost (measured:
-    514K reported vs 2.79M effective). Set token_budget on the same scale."""
+    context size — measured 4.0x-6.9x BELOW billed effective cost across two
+    instrumented runs. Set token_budget on the reported scale."""
     if len(args) < 4:
         print("usage: merge_ledger.py set-usage <ledger.json> <round> <role> <tokens>",
               file=sys.stderr)
@@ -225,8 +225,9 @@ def set_usage(args):
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
     total = sum(sum(v.values()) for v in ledger["usage"].values())
-    print(json.dumps({"round": int(rnd), "role": role, "round_tokens": sum(bucket.values()),
-                      "cumulative": total, "token_budget": ledger.get("token_budget")}))
+    if not getattr(set_usage, "quiet", False):
+        print(json.dumps({"round": int(rnd), "role": role, "round_tokens": sum(bucket.values()),
+                          "cumulative": total, "token_budget": ledger.get("token_budget")}))
 
 def notes_rotate(args):
     """Rotate HARNESS_NOTES.md: chunk/round sections move to the archive,
@@ -271,7 +272,14 @@ def write_diff(args):
         print("usage: merge_ledger.py diff <loop-dir> <round> <range>", file=sys.stderr)
         sys.exit(2)
     loop, rnd, rng = args[0], args[1], args[2]
-    extra = args[3:]   # pathspecs, e.g. -- ':!prompts.md' to keep logs out of scope
+    extra = list(args[3:])   # pathspecs, e.g. -- :!prompts.md to keep logs out
+    base = os.path.basename(os.path.abspath(loop))
+    # Nothing in the loop directory is ever under review; without this a
+    # closeout diff picks up ledger/archive churn (measured: 444 -> 862 lines).
+    if "--" in extra:
+        extra.append(f":(exclude){base}")
+    else:
+        extra += ["--", ".", f":(exclude){base}"]
     repo = os.path.dirname(os.path.abspath(loop))
     os.makedirs(os.path.join(loop, "briefs"), exist_ok=True)
     dpath = os.path.join(loop, "briefs", f"round-{rnd}.diff")
@@ -300,9 +308,12 @@ def next_round(args):
     loop, rnd = args[0], int(args[1])
     opt = {"--fragment": None, "--sha": None, "--pass": "full",
            "--phase-next": None, "--brief-severity": "major"}
+    usages = []
     i = 2
     while i < len(args):
-        if args[i] in opt and i + 1 < len(args):
+        if args[i] == "--usage" and i + 1 < len(args):
+            usages.append(args[i + 1]); i += 2
+        elif args[i] in opt and i + 1 < len(args):
             opt[args[i]] = args[i + 1]; i += 2
         else:
             i += 1
@@ -310,6 +321,13 @@ def next_round(args):
     here = os.path.dirname(os.path.abspath(__file__))
     is_qa = os.path.basename(os.path.abspath(loop)) == ".qa-loop" or os.path.exists(os.path.join(here, "qa_metrics.py")) and not os.path.exists(os.path.join(here, "metrics.py"))
     out = {"round": rnd}
+    for u in usages:   # role=tokens, applied to THIS round before metrics
+        role, _, tok = u.partition("=")
+        set_usage.quiet = True
+        set_usage([ledger_path, str(rnd), role, tok])
+        set_usage.quiet = False
+    if usages:
+        out["usage_recorded"] = len(usages)
     if opt["--fragment"]:
         m = subprocess.run([sys.executable, os.path.abspath(__file__), ledger_path, opt["--fragment"], str(rnd)],
                            capture_output=True, text=True)
@@ -364,17 +382,18 @@ def archive(args):
             sha = (led.get("round_start_sha") or led.get("build_sha") or "")[:7]
         except Exception:
             pass
-    # Name the archive after the repo's HEAD at archive time (the state the
-    # loop ended on), not the previous loop's starting sha.
-    try:
-        import subprocess
-        head = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(loop_dir)),
-                               "rev-parse", "--short", "HEAD"],
-                              capture_output=True, text=True)
-        if head.returncode == 0 and head.stdout.strip():
-            sha = head.stdout.strip()
-    except Exception:
-        pass
+    # Name the archive by the ARCHIVED loop's own identity — its scope's
+    # start sha when set, else its recorded round sha — so finding an old
+    # loop doesn't mean opening every directory. (HEAD-at-archive-time named
+    # every old loop after the NEW loop's commit.)
+    if os.path.exists(ledger_path):
+        try:
+            import re as _re
+            m = _re.match(r"([0-9a-fA-F]{4,40})\.\.", str(led.get("scope") or ""))
+            if m:
+                sha = m.group(1)[:7]
+        except Exception:
+            pass
     name = (args[1] if len(args) > 1 else
             datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
             + (f"-{sha}" if sha else ""))
@@ -458,11 +477,20 @@ def main():
             ledger["findings"].append(nf)
             added += 1
     ledger["round"] = rnd
+    out = {"round": rnd, "updated": updated, "added": added,
+           "total": len(ledger["findings"])}
+    # Blocker escalation (scope mode): the skill promises max_rounds 2 -> 5
+    # when a blocker appears; enforce it here so the promise is kept by code.
+    if (ledger.get("scope") and ledger.get("max_rounds") == 2
+            and any(f.get("severity") == "blocker"
+                    and f.get("current_status") in ("open", "partial")
+                    for f in ledger["findings"])):
+        ledger["max_rounds"] = 5
+        out["escalated_max_rounds"] = 5
     with open(ledger_path, "w") as fh:
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
-    print(json.dumps({"round": rnd, "updated": updated, "added": added,
-                      "total": len(ledger["findings"])}))
+    print(json.dumps(out))
 
 if __name__ == "__main__":
     main()

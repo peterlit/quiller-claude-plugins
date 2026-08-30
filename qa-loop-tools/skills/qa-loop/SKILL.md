@@ -79,7 +79,9 @@ tester rebuild a driver from scratch.
 
 ## Stage 1 — Workflows (once; the ONLY blocking human gate)
 0. If `.qa-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
-   `.phase` says done), archive it first:
+   `.phase` says done) — or an ABANDONED one (a stale `.phase` or ledger
+   left by a previous session; confirm with the human if unsure) — archive
+   it first:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py archive .qa-loop`
    WORKFLOWS.md, TESTCASES.md, HARNESS_NOTES.md, evidence/, and tools/ stay
    in place — they carry across loops (tools/ holds the testers' reusable
@@ -136,7 +138,8 @@ tester rebuild a driver from scratch.
    token_budget — roughly the full-pass estimate × max_rounds + 50% — and
    set it unless the human declines: an unset budget leaves the ceiling to
    operator vigilance (note: set-usage records harness-reported task tokens,
-   a directional floor of billed cost — budget on that scale).
+   measured 4-7x below billed effective cost — budget on the reported
+   scale).
    When they respond, RE-READ the file (they may have edited it directly) and
    reconcile their feedback before proceeding. Do not start testing without
    this sign-off.

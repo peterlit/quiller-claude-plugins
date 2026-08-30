@@ -61,6 +61,26 @@ def main():
     test_cmd = manifest.get("test_cmd")
     if not test_cmd or not isinstance(manifest.get("mutants"), list):
         die("manifest needs test_cmd and a mutants array")
+    # Parse-time validation: a bad manifest must fail LOUDLY before anything
+    # runs. Silent under-verification launders a guess into a claim
+    # (measured: an unsatisfiable mutant errored and the round still
+    # reported 8/8 killed).
+    config_errors = []
+    for i, m in enumerate(manifest["mutants"]):
+        mid = m.get("id", f"m{i + 1}")
+        for k in ("file", "original", "replacement"):
+            if not m.get(k):
+                config_errors.append(f"{mid}: missing '{k}'")
+        if m.get("expect", "killed") not in ("killed", "survived"):
+            config_errors.append(f"{mid}: expect must be killed|survived")
+        if "\n" in (m.get("original") or "") and m.get("line"):
+            config_errors.append(f"{mid}: multi-line 'original' with a 'line' key is "
+                                 f"unsatisfiable by construction (matching is per-line) — "
+                                 f"drop 'line' or use a single-line original")
+    if config_errors:
+        for e in config_errors:
+            print(f"mutate: MANIFEST ERROR — {e}", file=sys.stderr)
+        die(f"{len(config_errors)} manifest error(s); nothing was run", 2)
     timeout = int(manifest.get("timeout", 600))
     wt = tempfile.mkdtemp(prefix="mutate-")
     add = subprocess.run(["git", "-C", root, "worktree", "add", "--detach", wt, "HEAD"],
@@ -87,8 +107,12 @@ def main():
                 # Stale bytecode caches can mask a restored file (same size,
                 # same second): never let the test run write or trust them.
                 env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-                run = subprocess.run(test_cmd, shell=True, cwd=wt, capture_output=True,
-                                     text=True, timeout=timeout, env=env)
+                # pipefail: a piped test_cmd (e.g. `swift test | grep …`) must
+                # not report the filter's exit status as the suite's.
+                run = subprocess.run("set -o pipefail; " + test_cmd, shell=True,
+                                     executable="/bin/bash", cwd=wt,
+                                     capture_output=True, text=True,
+                                     timeout=timeout, env=env)
                 outcome = "killed" if run.returncode != 0 else "survived"
                 tail = (run.stdout + run.stderr)[-400:].strip()
             except subprocess.TimeoutExpired:
@@ -106,9 +130,15 @@ def main():
         shutil.rmtree(wt, ignore_errors=True)
     killed = sum(1 for r in results if r.get("outcome") == "killed")
     survived = sum(1 for r in results if r.get("outcome") == "survived")
-    print(json.dumps({"killed": killed, "survived": survived,
+    errors = sum(1 for r in results if r.get("outcome") == "error")
+    if errors:
+        print("=" * 60, file=sys.stderr)
+        print(f"mutate: {errors} MUTANT(S) ERRORED — the kill count is NOT "
+              f"trustworthy. Treat this run as unverified.", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+    print(json.dumps({"killed": killed, "survived": survived, "errors": errors,
                       "mismatches": mismatches, "results": results}, indent=2))
-    sys.exit(1 if mismatches else 0)
+    sys.exit(1 if (mismatches or errors) else 0)
 
 if __name__ == "__main__":
     main()

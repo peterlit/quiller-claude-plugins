@@ -51,8 +51,9 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   and the BUDGET stop fires (closeout + report) when the sum crosses the
   ceiling.
   Scale caveat: the harness-reported figure is roughly the agent's final
-  context — a directional floor, NOT billed effective cost (measured: 514K
-  reported vs 2.79M effective). Budget on the reported scale.
+  context — measured 4.0×–6.9× BELOW billed effective cost across two
+  instrumented runs. Budget on the reported scale; the report's Tokens
+  table is labeled accordingly.
   *In practice:* the qa gate now recommends a value (estimate × rounds
   +50%); accept it unless you have a reason not to.
 - **`HARNESS_NOTES.md` policy** `[qa]` — ~10KB ceiling, enforced before
@@ -111,10 +112,13 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   `archive <loop-dir> [name]` moves a finished run's state into
   `archive/<name>/` so the next loop starts clean; `scope <ledger> <a..b>`
   records the change under review so the report's WATCH LIST leads with it;
-  `diff <loop-dir> <N> <a..b>` materializes the round diff once for
-  subagents; `set-usage` records token cost; `next-round <loop-dir> <N>
-  [--fragment F]` folds merge + metrics + advance into one orchestrator
-  turn (each turn re-reads the whole session context).
+  `diff <loop-dir> <N> <a..b> [pathspecs]` materializes the round diff once
+  for subagents (the loop directory is always excluded — its state is never
+  under review); `set-usage` records token cost; `next-round <loop-dir> <N>
+  [--fragment F] [--usage role=tokens …]` folds merge + metrics + usage +
+  advance into one orchestrator turn. Archives are named by the ARCHIVED
+  loop's scope sha, so old loops are findable without opening each one. An
+  open blocker merged in review scope mode auto-escalates max_rounds 2→5.
   *In practice:* a finding's live status is `current_status` — a top-level
   `status` field doesn't exist, which is why extraction goes through the
   `open` verb instead of hand-parsing.

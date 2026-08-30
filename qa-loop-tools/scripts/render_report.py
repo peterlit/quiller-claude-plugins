@@ -11,7 +11,7 @@ promotions, persona matrix, coverage gaps, closeout, resolutions. The one
 section that needs judgment, WATCH LIST, is emitted as candidate stubs with a
 "look here because:" slot the orchestrator fills in. Works for both loops.
 """
-import glob, json, os, subprocess, sys
+import glob, json, os, shlex, subprocess, sys
 
 OPENISH = ("open", "partial")
 SEV_ORDER = ("blocker", "major", "minor")
@@ -85,6 +85,16 @@ def main():
 
     L.append("## Trend\n")
     L.append(rounds_md.strip() + "\n" if rounds_md else "_no rounds.md_\n")
+
+    if usage:
+        L.append("## Tokens (reported — measured 4-7x below billed effective)\n")
+        L.append("| Round | By role | Total |")
+        L.append("|---|---|---:|")
+        for rk in sorted(usage, key=lambda k: int(k) if k.isdigit() else 0):
+            roles = "; ".join(f"{r} {v:,}" for r, v in sorted(usage[rk].items()))
+            L.append(f"| {rk} | {roles} | {sum(usage[rk].values()):,} |")
+        L.append(f"| **all** | | **{sum(sum(v.values()) for v in usage.values()):,}** |")
+        L.append("")
 
     L.append("## Open findings by severity\n")
     auto_open = [f for f in findings if f.get("current_status") in OPENISH
@@ -204,7 +214,9 @@ def main():
 
     L.append("## WATCH LIST\n")
     L.append("_The part a human should actually read. Candidates below are "
-             "mechanical; the orchestrator fills each \"look here because\"._\n")
+             "mechanical; the orchestrator fills each \"look here because\". "
+             "Lead with any shipped BEHAVIOR CHANGE: convergence means two "
+             "same-family agents agreed — not that the change is correct._\n")
     cands = []
     for f in findings:
         why = []
@@ -226,9 +238,16 @@ def main():
     repo = os.path.dirname(os.path.abspath(loop))
     diff_cands = 0
 
+    loop_base = os.path.basename(os.path.abspath(loop))
+
     def numstat(rng):
+        toks = shlex.split(rng)   # stored scopes may carry pathspecs
+        if "--" in toks:
+            toks.append(f":(exclude){loop_base}")
+        else:
+            toks += ["--", ".", f":(exclude){loop_base}"]
         try:
-            ns = subprocess.run(["git", "-C", repo, "diff", "--numstat"] + rng.split(),
+            ns = subprocess.run(["git", "-C", repo, "diff", "--numstat"] + toks,
                                 capture_output=True, text=True, timeout=30)
         except Exception:
             return None
@@ -250,6 +269,13 @@ def main():
             top = ", ".join(f"`{p}` (+{a}/-{d})" for _, a, d, p in files[:3])
             L.append(f"- **seed scope** `{ledger['scope']}` — {len(files)} files, "
                      f"{sum(f[0] for f in files)} lines; largest: {top} — look here because: <!-- orchestrator fills -->")
+            diff_cands += 1
+        else:
+            # Never vanish silently — this is the first candidate the human
+            # is told to read (a quoted pathspec once dropped it unnoticed).
+            L.append(f"- **seed scope** `{ledger['scope']}` — git matched NO files "
+                     f"(check the range and pathspec quoting) — look here anyway: "
+                     f"this range is where the findings live")
             diff_cands += 1
     for rnd in sorted(shas, key=int):
         start = shas[rnd]

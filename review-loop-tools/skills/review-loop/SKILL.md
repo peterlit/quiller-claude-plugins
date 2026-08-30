@@ -51,7 +51,9 @@ You orchestrate an iterative review loop between the `implementer` and
    the transcript is oversized and no `briefs/.session-ok` marker exists —
    ask the human, then either restart fresh or create the marker.)
 1. If `.review-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
-   `.phase` says done), archive it before anything else:
+   `.phase` says done) — or an ABANDONED one (a stale `.phase` or ledger left
+   by a previous session; confirm with the human if unsure) — archive it
+   before anything else:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py archive .review-loop`
    (moves ledger, rounds, report, fragments, briefs, and .phase into
    `.review-loop/archive/<timestamp-sha>/`; pass a name to override). Never
@@ -60,8 +62,10 @@ You orchestrate an iterative review loop between the `implementer` and
    `{ "round": 0, "round_start_sha": null, "max_rounds": 5, "token_budget": null, "findings": [] }`
    (use the user's max_rounds / token_budget if they gave them). SCOPE mode
    defaults max_rounds to 2 — every measured scoped run converged by round
-   2 or 3 — and ESCALATES to 5 automatically if the seed or round 1 yields a
-   blocker (say so when it happens). Cold reviews keep 5. token_budget is a
+   2 or 3 — and ESCALATES to 5 automatically if a blocker appears (the merge
+   verb enforces this: an open blocker merged while scope is set and
+   max_rounds is 2 bumps max_rounds to 5 and reports "escalated_max_rounds";
+   announce it when you see it). Cold reviews keep 5. token_budget is a
    hard ceiling on cumulative subagent tokens (BUDGET stop); leave null to
    disable. Also write
    `.review-loop/.gitignore` containing exactly these three lines:
@@ -77,7 +81,8 @@ You orchestrate an iterative review loop between the `implementer` and
    a converging run look like thrashing. Three seed modes, in priority order:
    - SCOPE: the user named a change under review (a sha range, a diff file,
      or a PR). The range may carry pathspec excludes — e.g.
-     `main..HEAD -- ':!prompts.md'` — keep pasted logs and prompt journals
+     `main..HEAD -- :!prompts.md` (UNQUOTED — stored quotes reach git
+     literally and match nothing) — keep pasted logs and prompt journals
      out of reviewed scope (measured: 816 of 1,439 seed lines were a pasted
      crash report). Record it first,
      `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py scope .review-loop/ledger.json <a..b>`
@@ -106,8 +111,8 @@ advances to round 1 — records the sha, writes
 round; they are fixed in the one closeout pass), and sets the phase marker.
 1. Dispatch `implementer` with the brief + the reviewer's latest summary
    (the Agent-tool hook stamps `:dispatched` for you). Wait for its CHANGES
-   block, confirm it committed, then record its cost:
-   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py set-usage .review-loop/ledger.json <N> implementer <tokens from the task result>`
+   block and confirm it committed; note the task result's token count — you
+   pass it to next-round in step 3 (no separate set-usage call).
 2. Materialize the diff ONCE, write the phase, dispatch the reviewer:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py diff .review-loop <N> <round_start_sha>..HEAD`
    (writes `briefs/round-<N>.diff` and `.stat` — nothing enters your
@@ -117,13 +122,14 @@ round; they are fixed in the one closeout pass), and sets the phase marker.
    block (claims to validate) including its `verify_cmd` (the scoped test
    command — the full suite runs once, at closeout), the mutation manifest
    path if named plus `${CLAUDE_PLUGIN_ROOT}/scripts/mutate.py`, and the
-   fragment path `.review-loop/fragments/round-<N>.json`. Record its cost
-   with set-usage when it returns.
+   fragment path `.review-loop/fragments/round-<N>.json`. Note its token
+   count for step 3. (The diff verb auto-excludes `.review-loop/` and passes
+   extra pathspecs through, same syntax as scope.)
 3. Close the round in one call — merge, metrics, and (if continuing) the
    advance to N+1 with its brief and phase marker:
-   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py next-round .review-loop <N> --fragment .review-loop/fragments/round-<N>.json`
-   It prints the verdict (`decision`, open counts) and, on `continue`, the
-   next round's brief path.
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py next-round .review-loop <N> --fragment .review-loop/fragments/round-<N>.json --usage implementer=<tokens> --usage reviewer=<tokens>`
+   It records both costs, prints the verdict (`decision`, open counts) and,
+   on `continue`, the next round's brief path.
 4. Act on `decision`: `continue` -> go to round N+1. `thrashing_soft` ->
    if a human can answer, write "awaiting-human" to `.review-loop/.phase`,
    STOP, and ask: abort with the report, or run one more round? (Approved
@@ -134,6 +140,13 @@ round; they are fixed in the one closeout pass), and sets the phase marker.
    `.review-loop/.phase` to "done".
 
 ## Closeout (one mop-up cycle after any stop; skip if nothing is eligible)
+Closeout fixes are the SMALLEST CORRECT change. If the right fix is
+design-sized — new algorithms, new abstractions, a large diff — it does NOT
+belong in the no-iteration phase: punt it to BACKLOG with a sketch, or, if
+it is a major, tell the human it needs a real round (measured: one closeout
+"minor" grew into hand-rolled map projections — 28% of the whole run's
+cost — in the one phase where no iteration can follow). Say this in the
+closeout implementer's brief.
 Eligible findings: open auto-routed findings that are introduced_by_fix (any
 severity — the loop created these regressions and must not ship them to
 BACKLOG), plus open minors. Open majors that are NOT introduced_by_fix are
@@ -227,7 +240,8 @@ merge_ledger.py's verbs:
 - scope:     `merge_ledger.py scope <ledger> <a..b>` (the change under review; first watch-list candidate)
 - diff:      `merge_ledger.py diff <loop-dir> <N> <a..b>` (materialize the round diff + stat for subagents)
 - set-usage: `merge_ledger.py set-usage <ledger> <N> <role> <tokens>` (Tokens column; feeds token_budget —
-  the harness-reported figure is a directional FLOOR (~final context), not billed cost; budget on that scale)
+  the harness-reported figure is measured 4-7x BELOW billed effective cost; budget on the reported scale.
+  next-round takes repeatable `--usage role=tokens` so no separate set-usage calls are needed)
 - next-round:`merge_ledger.py next-round <loop-dir> <N> [--fragment F]` (merge + metrics + advance, one turn)
 The CHANGES block carries `verify_cmd` (scoped tests the reviewer reruns).
 Hooks active during a loop: `read_guard` denies whole-file dumps,

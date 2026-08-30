@@ -92,7 +92,17 @@ device to verify user-visible behavior — the simulator control tool's
 discipline applies: that device only.
 
 Mutation claims: manifest named in CHANGES → run `python3 <mutate.py> <manifest>`
-and judge from its output; `null` → skip. Hotspot table given → start there.
+and judge from its output — and if the summary shows `errors > 0`, the kill
+count is UNVERIFIED: say so in the finding's note (a silent apply-error once
+let "8/8 killed" stand for a round). `null` → skip. Hotspot table given →
+start there.
+
+Collateral-damage sweep: the CHANGES block lists touched_files. Grep the
+test tree for test classes referencing the types defined in those files and
+RUN those classes too (scoped, filtered output) — tests that pin contracts
+of changed code the implementer didn't touch are where collateral damage
+hides (measured: a red app-target test shipped two full rounds because no
+round's verify_cmd covered it).
 Simulator discipline — other sessions' simulators are running on this Mac:
 - You may touch ONLY the simulator device (udid) named in your dispatch. If
   none is named, you have no simulator; build and test without one.

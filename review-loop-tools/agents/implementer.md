@@ -76,6 +76,7 @@ the JSON block.
     { "id": "<finding-id>", "argument": "<why the reviewer is wrong>" }
   ],
   "mutations": "<path to mutation manifest, or null>",
-  "verify_cmd": "<the scoped test command you ran, e.g. xcodebuild ... -only-testing:AppTests/CartTests; the reviewer reruns exactly this>"
+  "verify_cmd": "<the scoped test command you ran, e.g. xcodebuild ... -only-testing:AppTests/CartTests; the reviewer reruns exactly this>",
+  "touched_files": ["<every production file you changed — the reviewer sweeps tests that pin their types>"]
 }
 ```
