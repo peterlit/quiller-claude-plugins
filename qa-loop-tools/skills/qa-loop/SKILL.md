@@ -92,9 +92,10 @@ tester rebuild a driver from scratch.
 1. If `.qa-loop/ledger.json` doesn't exist, create it with:
    `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "token_budget": null, "implemented_rounds": [], "findings": [] }`
    (token_budget: a hard ceiling on cumulative subagent tokens — record each
-   dispatch's cost with `merge_ledger.py set-usage <ledger> <N> <role>
-   <tokens>` from the task result, and the BUDGET stop fires when the sum
-   crosses it; null disables.)
+   dispatch's cost from the task result — `set-usage` REPLACES a
+   (round, role) figure, `add-usage` accumulates; use unique per-dispatch
+   roles like tester-wf2-1 with set-usage, or add-usage for a shared role.
+   The BUDGET stop fires when the sum crosses the budget; null disables.)
    (use the user's max_rounds and parallel_testers if they gave them; cap
    parallel_testers at 3 — each simulator wants 2-6GB of RAM). Also write
    `.qa-loop/.gitignore` containing exactly these five lines:
@@ -137,9 +138,10 @@ tester rebuild a driver from scratch.
    so the human can trim max_rounds with real data. Also recommend a
    token_budget — roughly the full-pass estimate × max_rounds + 50% — and
    set it unless the human declines: an unset budget leaves the ceiling to
-   operator vigilance (note: set-usage records harness-reported task tokens,
-   measured 4-7x below billed effective cost — budget on the reported
-   scale).
+   operator vigilance (note: recorded harness tokens are WORKLOAD-DEPENDENT
+   below billed effective cost — measured ~4x for code loops, ~11x for this
+   simulator loop; the ratio grows with turns per dispatch. Budget on the
+   reported scale for THIS loop type).
    When they respond, RE-READ the file (they may have edited it directly) and
    reconcile their feedback before proceeding. Do not start testing without
    this sign-off.
@@ -194,12 +196,17 @@ skew every metric downstream.
    cases for the perf lane, and writes `.qa-loop/briefs/round-<N>-plan.json`.
    If it reports `unmapped_workflows` on a targeted pass, add their
    `paths(...)` lines to WORKFLOWS.md and re-plan.
-4. Before dispatching: if HARNESS_NOTES.md exceeds ~10KB, rotate it —
+4. Before EVERY dispatch batch, rotate the notes —
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py notes-rotate .qa-loop`
-   — and if still over, trim the general sections yourself, archiving what
-   you cut. Do NOT dispatch above the ceiling: every tester pays for every
-   byte on every request (measured: an 86KB file was ~30% of per-request
-   cost). Each chunk dispatch carries its manifest's turn_budget.
+   — not just when they look big: the file crossed its ceiling four times
+   in one measured loop, and the rotate now enforces the ~10KB ceiling
+   itself (largest sections archived until under). Do NOT dispatch above
+   the ceiling: every tester pays for every byte on every request. Each
+   chunk dispatch carries its manifest's turn_budget.
+   Between chunk dispatches on the SAME worker, reset app state again —
+   testers inject saves and fixtures, and one chunk's fixture must never be
+   the next chunk's starting state (measured: a device "arrived already
+   showing a Flawless streak").
    Write "round-<N>-testing" to `.qa-loop/.phase` and run the FUNCTIONAL LANE.
    One dispatch per chunk manifest in the plan. Every chunk dispatch
    carries: its manifest's test cases, ONLY its workflows' findings —
@@ -290,7 +297,10 @@ skew every metric downstream.
         committed, then append N to ledger.json's top-level
         implemented_rounds array — the metrics use it to tell
         post-implementation rounds from discovery rounds.
-     c. FIX REVIEW: write "round-<N>-fix-review" to `.qa-loop/.phase` and
+     c. FIX REVIEW (its fragment contains REJECTIONS ONLY — "updated: 1"
+        against "14 sound, 1 rejected" is the contract, not truncation;
+        `fixed` is minted by the next test pass, never by the reviewer):
+        write "round-<N>-fix-review" to `.qa-loop/.phase` and
         dispatch `fix-reviewer` in FIX REVIEW mode with: the sha range of the
         implementer's commits this round, the CHANGES block (labeled as
         claims), the findings it claims to address (with fix_risk and

@@ -76,13 +76,20 @@ implementer's inherit.)
   Chunk-specific notes go under a `## Chunk <slug>` heading — rotation
   archives those at loop end; only durable, environment-general recipes
   belong in the general sections (the file has a ~10KB ceiling and every
-  tester pays for every byte of it).
+  tester pays for every byte of it). Append at most ~15 lines per dispatch,
+  and prefer EDITING an existing bullet over adding a new section — the
+  file crossed its ceiling four times in one measured loop.
 - Before BUILDING any helper (image diff, cropping, save injection, screen
   recording), check `.qa-loop/tools/` and the notes' general index — it
   probably already exists (measured: three image-diff tools built
   independently in one round). A new REUSABLE helper goes in
   `.qa-loop/tools/` with one index line in the notes; your scratch dir is
   for throwaway files only and is deleted at teardown.
+- Verify your STARTING state before the first test case: you should arrive
+  on a reset device. If it arrives dirty (leftover fixtures, streaks,
+  injected saves from a previous chunk), wipe it yourself, note it in your
+  summary, and only then begin — a stale fixture invalidates every result
+  after it.
 - Apply the Fixture policy from WORKFLOWS.md in every starting state (pinned
   seeds, deals, launch arguments) so repro steps replay identically next
   round. If the app offers no way to pin its randomness, file a

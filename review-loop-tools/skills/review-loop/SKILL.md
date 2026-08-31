@@ -239,9 +239,11 @@ merge_ledger.py's verbs:
 - archive:   `merge_ledger.py archive .review-loop [name]`
 - scope:     `merge_ledger.py scope <ledger> <a..b>` (the change under review; first watch-list candidate)
 - diff:      `merge_ledger.py diff <loop-dir> <N> <a..b>` (materialize the round diff + stat for subagents)
-- set-usage: `merge_ledger.py set-usage <ledger> <N> <role> <tokens>` (Tokens column; feeds token_budget —
-  the harness-reported figure is measured 4-7x BELOW billed effective cost; budget on the reported scale.
-  next-round takes repeatable `--usage role=tokens` so no separate set-usage calls are needed)
+- set-usage: `merge_ledger.py set-usage <ledger> <N> <role> <tokens>` REPLACES a (round, role) figure;
+  add-usage accumulates (for many dispatches sharing a role). Tokens column; feeds token_budget.
+  Scale is WORKLOAD-DEPENDENT: measured ~4x below billed effective for code loops, ~11x for
+  simulator loops — the ratio grows with turns per dispatch; budget on the reported scale.
+  next-round takes repeatable `--usage role=tokens` (replace semantics) so no separate calls are needed.
 - next-round:`merge_ledger.py next-round <loop-dir> <N> [--fragment F]` (merge + metrics + advance, one turn)
 The CHANGES block carries `verify_cmd` (scoped tests the reviewer reruns).
 Hooks active during a loop: `read_guard` denies whole-file dumps,

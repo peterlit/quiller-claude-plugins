@@ -50,17 +50,19 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   (`set-usage`) from the task results; `rounds.md` gains a Tokens column,
   and the BUDGET stop fires (closeout + report) when the sum crosses the
   ceiling.
-  Scale caveat: the harness-reported figure is roughly the agent's final
-  context — measured 4.0×–6.9× BELOW billed effective cost across two
-  instrumented runs. Budget on the reported scale; the report's Tokens
-  table is labeled accordingly.
+  Scale caveat: the harness-reported figure is WORKLOAD-DEPENDENT below
+  billed effective cost — measured ~4× for code loops and ~11× for
+  simulator loops (the ratio grows with turns per dispatch). Budget on the
+  reported scale for your loop type. `set-usage` REPLACES a (round, role)
+  figure — corrections never inflate the feed; `add-usage` accumulates.
   *In practice:* the qa gate now recommends a value (estimate × rounds
   +50%); accept it unless you have a reason not to.
-- **`HARNESS_NOTES.md` policy** `[qa]` — ~10KB ceiling, enforced before
-  dispatch: `notes-rotate` archives `## Chunk`/`## Round` sections at loop
-  end and on demand; general sections carry across. Measured: cutting the
-  file from 86KB to 6.9KB was worth 34% of per-request cost, and it regrew
-  to 22KB in one round — this needs policy, not manual cuts.
+- **`HARNESS_NOTES.md` policy** `[qa]` — ~10KB ceiling, enforced: the
+  orchestrator rotates before EVERY dispatch batch, and `notes-rotate` now
+  archives the largest sections itself until the file is under the ceiling
+  (measured: it crossed 10KB four times in one loop, and heading-rotation
+  alone couldn't get it back under). Testers cap appends at ~15 lines per
+  dispatch. Cutting 86KB→6.9KB once measured 34% of per-request cost.
 - **`.qa-loop/tools/`** `[qa]` — the testers' reusable rigs (image diff,
   crop, save injection) live here, indexed in the notes, committed, never
   deleted by provisioning. Measured: without it, three image-diff tools were

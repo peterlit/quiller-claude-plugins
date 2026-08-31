@@ -44,8 +44,11 @@ Write a LEDGER fragment to the path given in your dispatch (write a temp
 file, then mv it into place). Include ONLY findings that need a change:
 - unsound -> current_status "open", note "FIX REJECTED (round <N>): <reason>"
 - harmful -> additionally a new finding with introduced_by_fix: true
-Sound fixes need no entry. Return a 2-3 line summary: verdict counts, plus a
-one-line reason for every rejection.
+Sound fixes need no entry — your fragment contains REJECTIONS (and new
+harmful findings) ONLY, so a merge summary of "updated: 1" against 15
+reviewed is the contract working, not a truncated artifact. `fixed` is
+minted by the next test pass on the device, never by you. Return a 2-3 line
+summary: verdict counts, plus a one-line reason for every rejection.
 
 ## INTENT CHECK mode (when a human accepts a proposal)
 

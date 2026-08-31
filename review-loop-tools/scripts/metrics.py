@@ -185,6 +185,14 @@ def main():
     if not os.path.exists(rounds_md):
         with open(rounds_md, "w") as fh:
             fh.write(header + sep)
+    else:
+        # Idempotent per round: metrics may legitimately run several times
+        # for one round (functional lane, perf lane, post-fix-review) —
+        # replace the round's row instead of stacking three of them.
+        with open(rounds_md) as fh:
+            lines = [l for l in fh if not l.startswith(f"| {N} |")]
+        with open(rounds_md, "w") as fh:
+            fh.writelines(lines)
     with open(rounds_md, "a") as fh:
         fh.write(f"| {N} | {blockers_open} | {majors_open} | {minors_open} | "
                  f"{closed} | {new} | {reopened} | {promoted} | {net:+d} | {round_tokens} | {decision} |\n")

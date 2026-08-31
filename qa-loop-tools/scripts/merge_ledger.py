@@ -8,7 +8,8 @@ Usage:
   merge_ledger.py open <ledger.json> [auto|proposal|all|closeout] [--region WF-n]
   merge_ledger.py archive <loop-dir> [name]
   merge_ledger.py scope <ledger.json> <range>
-  merge_ledger.py set-usage <ledger.json> <round> <role> <tokens>
+  merge_ledger.py set-usage <ledger.json> <round> <role> <tokens>   (REPLACES)
+  merge_ledger.py add-usage <ledger.json> <round> <role> <tokens>   (accumulates)
   merge_ledger.py diff <loop-dir> <round> <range>
   merge_ledger.py next-round <loop-dir> <round> [--fragment F] [--sha S] [--pass full|targeted] [--phase-next NAME] [--brief-severity major|minor]
 
@@ -200,14 +201,18 @@ def set_scope(args):
         fh.write("\n")
     print(json.dumps({"scope": args[1]}))
 
-def set_usage(args):
-    """Record a subagent's token count for a round (from the task result), so
-    rounds.md/report carry a Tokens column and token_budget can stop the loop.
-    NOTE the scale: the harness-reported figure is roughly the agent's final
-    context size — measured 4.0x-6.9x BELOW billed effective cost across two
-    instrumented runs. Set token_budget on the reported scale."""
+def _usage(args, verb, accumulate):
+    """set-usage REPLACES a (round, role) figure — the verb is named set, and
+    a corrected figure must not inflate the budget feed (measured: a
+    re-record read 89% over what was spent, against a live token_budget).
+    add-usage ACCUMULATES — for many dispatches sharing one role in a round
+    (qa chunk testers). Prefer unique per-dispatch roles (tester-wf2-1) with
+    set-usage. Scale: the harness-reported figure is WORKLOAD-DEPENDENT —
+    measured ~4x below billed effective for code loops and ~11x for
+    simulator loops; the ratio grows with turns per dispatch. Budget on the
+    reported scale for your loop type."""
     if len(args) < 4:
-        print("usage: merge_ledger.py set-usage <ledger.json> <round> <role> <tokens>",
+        print(f"usage: merge_ledger.py {verb} <ledger.json> <round> <role> <tokens>",
               file=sys.stderr)
         sys.exit(2)
     path, rnd, role = args[0], args[1], args[2]
@@ -220,7 +225,7 @@ def set_usage(args):
     with open(path) as fh:
         ledger = json.load(fh)
     bucket = ledger.setdefault("usage", {}).setdefault(str(int(rnd)), {})
-    bucket[role] = bucket.get(role, 0) + tokens
+    bucket[role] = bucket.get(role, 0) + tokens if accumulate else tokens
     with open(path, "w") as fh:
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
@@ -228,6 +233,12 @@ def set_usage(args):
     if not getattr(set_usage, "quiet", False):
         print(json.dumps({"round": int(rnd), "role": role, "round_tokens": sum(bucket.values()),
                           "cumulative": total, "token_budget": ledger.get("token_budget")}))
+
+def set_usage(args):
+    _usage(args, "set-usage", accumulate=False)
+
+def add_usage(args):
+    _usage(args, "add-usage", accumulate=True)
 
 def notes_rotate(args):
     """Rotate HARNESS_NOTES.md: chunk/round sections move to the archive,
@@ -253,16 +264,33 @@ def notes_rotate(args):
             drop.append(sec)
         else:
             keep.append(sec)
-    if drop:
+    # Second pass: heading rotation alone could not get under the ceiling in
+    # the field (growth was in general sections) — archive the LARGEST
+    # remaining sections (preamble kept) until under 10KB.
+    CEIL = 10240
+    second = []
+    if sum(len(k) for k in keep) > CEIL and len(keep) > 1:
+        pre, secs = keep[0], keep[1:]
+        order = sorted(range(len(secs)), key=lambda i: -len(secs[i]))
+        keep_flag = [True] * len(secs)
+        cur = len(pre) + sum(len(s) for s in secs)
+        for i in order:
+            if cur <= CEIL:
+                break
+            keep_flag[i] = False
+            cur -= len(secs[i])
+            second.append(secs[i])
+        keep = [pre] + [s for f, s in zip(keep_flag, secs) if f]
+    if drop or second:
         os.makedirs(os.path.join(loop, "archive"), exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         with open(os.path.join(loop, "archive", f"harness-notes-{stamp}.md"), "w") as fh:
-            fh.write("".join(drop))
+            fh.write("".join(drop + second))
         with open(p, "w") as fh:
             fh.write("".join(keep))
     size = os.path.getsize(p)
-    print(json.dumps({"rotated_sections": len(drop), "kept_bytes": size,
-                      "over_ceiling": size > 10240}))
+    print(json.dumps({"rotated_sections": len(drop), "ceiling_sections": len(second),
+                      "kept_bytes": size, "over_ceiling": size > CEIL}))
 
 def write_diff(args):
     """Materialize the round diff ONCE so subagents read it from disk instead of
@@ -427,7 +455,8 @@ def archive(args):
 def main():
     verbs = {"resolve": resolve, "set-round": set_round,
              "open": open_findings, "archive": archive, "scope": set_scope,
-             "set-usage": set_usage, "diff": write_diff, "next-round": next_round,
+             "set-usage": set_usage, "add-usage": add_usage,
+             "diff": write_diff, "next-round": next_round,
              "notes-rotate": notes_rotate}
     if len(sys.argv) >= 2 and sys.argv[1] in verbs:
         verbs[sys.argv[1]](sys.argv[2:])
