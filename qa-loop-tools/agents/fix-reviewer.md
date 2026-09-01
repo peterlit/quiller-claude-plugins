@@ -42,7 +42,10 @@ constraints one by one — a single unmet constraint makes the fix unsound.
 
 Write a LEDGER fragment to the path given in your dispatch (write a temp
 file, then mv it into place). Include ONLY findings that need a change:
-- unsound -> current_status "open", note "FIX REJECTED (round <N>): <reason>"
+- unsound -> current_status "open", note "FIX REJECTED (round <N>): <reason>",
+  AND append {"round": <N>, "reason": "<one line>"} to the finding's
+  "rejections" array (the merge unions it; rejection history must survive
+  later status changes)
 - harmful -> additionally a new finding with introduced_by_fix: true
 Sound fixes need no entry — your fragment contains REJECTIONS (and new
 harmful findings) ONLY, so a merge summary of "updated: 1" against 15
@@ -78,7 +81,12 @@ Simulator discipline — other sessions' simulators are running on this Mac:
   none is named, you have no simulator; build and test without one.
 - NEVER locate an app process by name (`pgrep -f <AppName>`, `lldb -n`) —
   that finds another session's device. Resolve processes through the named
-  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
+  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all. If the named
+  device NO LONGER EXISTS when you check, STOP and report it in your summary
+  as a pause — never skip device-dependent verification and proceed as if it
+  passed (measured: a vanished simulator turned every XCUITest into a silent
+  skip and a red target shipped). The orchestrator re-provisions and resumes
+  you.
 
 Do not review style, naming, or broad architecture — that is another
 plugin's job. Every judgment cites the diff or the code, never vibes.

@@ -205,10 +205,15 @@ def main():
         decision, reason = "budget", f"cumulative {cumulative_tokens} tokens >= token_budget {budget}; stop, closeout, report"
     elif any_reopened_twice or (net_prev is not None and net <= 0 and net_prev <= 0
                                 and post_impl(N) and post_impl(N - 1)) or region_thrash:
-        if blockers_open == 0 and closed > 0:
-            decision, reason = "thrashing_soft", "thrashing signals but with mitigating progress (0 open blockers, positive closes) — confirm with the human before aborting"
+        consulted_at = ledger.get("thrashing_consulted")
+        if blockers_open == 0 and closed > 0 and not consulted_at:
+            if N >= max_rounds:
+                decision, reason = "thrashing_soft", "thrashing signals with mitigating progress AT max_rounds — the only coherent continue is RAISING max_rounds; ask: abort, or raise max_rounds and run one more round"
+            else:
+                decision, reason = "thrashing_soft", "thrashing signals but with mitigating progress (0 open blockers, positive closes) — confirm with the human before aborting"
         else:
-            decision, reason = "thrashing", "oscillation or non-positive net over two post-implementation rounds or a churning region"
+            suffix = f" (human already consulted at round {consulted_at}; this signal is final)" if consulted_at else ""
+            decision, reason = "thrashing", "oscillation or non-positive net over two post-implementation rounds or a churning region" + suffix
     elif disp_prev is not None and disp_now == disp_prev and len(disp_now) > 0:
         decision, reason = "stalemate", "identical disputed set for two consecutive rounds"
     elif (net_prev is not None and net <= 1 and net_prev <= 1 and blockers_open == 0

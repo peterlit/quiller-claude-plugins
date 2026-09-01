@@ -173,7 +173,11 @@ def open_findings(args):
                 continue
         elif routing != "all" and r != routing:
             continue
-        if rank.get(f.get("severity"), 1) < rank[min_sev]:
+        # fix_risk findings ride in round briefs at ANY severity: a minor
+        # that changes shipped behavior must not wait for the no-iteration
+        # closeout (measured: a deferred minor changed a shipped predicate
+        # on both platforms there).
+        if rank.get(f.get("severity"), 1) < rank[min_sev] and not f.get("fix_risk"):
             continue
         if regions:
             reg = str(f.get("region", ""))
@@ -199,7 +203,7 @@ def set_scope(args):
     with open(args[0], "w") as fh:
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
-    print(json.dumps({"scope": args[1]}))
+    print(json.dumps({"scope": ledger["scope"]}))
 
 def _usage(args, verb, accumulate):
     """set-usage REPLACES a (round, role) figure — the verb is named set, and
@@ -452,8 +456,28 @@ def archive(args):
         sys.exit(1)
     print(json.dumps({"archived_to": dest, "moved": moved}))
 
+def consulted(args):
+    """Record that the human approved a thrashing_soft continuation at round
+    N. Metrics then treats the NEXT thrashing signal as HARD — the loop must
+    not re-ask a question the human already answered (measured: a report
+    header re-asked at round 4 after a round-3 approval)."""
+    if len(args) < 2:
+        print("usage: merge_ledger.py consulted <ledger.json> <round>", file=sys.stderr)
+        sys.exit(2)
+    with open(args[0]) as fh:
+        ledger = json.load(fh)
+    try:
+        ledger["thrashing_consulted"] = int(args[1])
+    except ValueError:
+        print(f"merge_ledger: round must be an integer, got '{args[1]}'", file=sys.stderr)
+        sys.exit(1)
+    with open(args[0], "w") as fh:
+        json.dump(ledger, fh, indent=2)
+        fh.write("\n")
+    print(json.dumps({"thrashing_consulted": ledger["thrashing_consulted"]}))
+
 def main():
-    verbs = {"resolve": resolve, "set-round": set_round,
+    verbs = {"resolve": resolve, "set-round": set_round, "consulted": consulted,
              "open": open_findings, "archive": archive, "scope": set_scope,
              "set-usage": set_usage, "add-usage": add_usage,
              "diff": write_diff, "next-round": next_round,
@@ -461,7 +485,9 @@ def main():
     if len(sys.argv) >= 2 and sys.argv[1] in verbs:
         verbs[sys.argv[1]](sys.argv[2:])
         return
-    ledger_path, frag_path, rnd = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    no_escalate = "--no-escalate" in sys.argv
+    argv = [a for a in sys.argv if a != "--no-escalate"]
+    ledger_path, frag_path, rnd = argv[1], argv[2], int(argv[3])
     with open(ledger_path) as fh:
         ledger = json.load(fh)
     with open(frag_path) as fh:
@@ -483,9 +509,15 @@ def main():
             old_sev = f.get("severity")
             for k, v in nf.items():
                 if k in ("status_history", "first_seen_round", "evidence",
-                         "severity_history"):
+                         "severity_history", "rejections"):
                     continue
                 f[k] = v
+            if nf.get("rejections"):
+                # Rejection history must SURVIVE later status changes — notes
+                # get overwritten as findings are fixed, and a measured report
+                # rendered "none" after seven real rejections.
+                cur = f.get("rejections") or []
+                f["rejections"] = cur + [r for r in nf["rejections"] if r not in cur]
             new_sev = f.get("severity")
             if old_sev and new_sev and old_sev != new_sev:
                 f.setdefault("severity_history", []).append(
@@ -510,7 +542,7 @@ def main():
            "total": len(ledger["findings"])}
     # Blocker escalation (scope mode): the skill promises max_rounds 2 -> 5
     # when a blocker appears; enforce it here so the promise is kept by code.
-    if (ledger.get("scope") and ledger.get("max_rounds") == 2
+    if (not no_escalate and ledger.get("scope") and ledger.get("max_rounds") == 2
             and any(f.get("severity") == "blocker"
                     and f.get("current_status") in ("open", "partial")
                     for f in ledger["findings"])):

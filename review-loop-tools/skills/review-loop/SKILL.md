@@ -107,8 +107,10 @@ Each orchestrator turn re-reads the whole session context (~25K effective
 per turn measured); the verbs below fold the bookkeeping into single calls.
 Start: after the seed merge, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py next-round .review-loop 0`
 advances to round 1 — records the sha, writes
-`briefs/round-1-brief.json` (blockers and majors ONLY: minors never cost a
-round; they are fixed in the one closeout pass), and sets the phase marker.
+`briefs/round-1-brief.json` (blockers, majors, AND minors carrying
+fix_risk — a minor that changes shipped behavior belongs in a round where
+iteration can catch a bad fix; plain test/doc/polish minors wait for the
+one closeout pass), and sets the phase marker.
 1. Dispatch `implementer` with the brief + the reviewer's latest summary
    (the Agent-tool hook stamps `:dispatched` for you). Wait for its CHANGES
    block and confirm it committed; note the task result's token count — you
@@ -132,8 +134,13 @@ round; they are fixed in the one closeout pass), and sets the phase marker.
    on `continue`, the next round's brief path.
 4. Act on `decision`: `continue` -> go to round N+1. `thrashing_soft` ->
    if a human can answer, write "awaiting-human" to `.review-loop/.phase`,
-   STOP, and ask: abort with the report, or run one more round? (Approved
-   continuation: one more round; a second thrashing signal then is hard.)
+   STOP, and ask — the verdict's reason tells you which question: below the
+   cap, "abort, or run one more round?"; AT max_rounds, "abort, or raise
+   max_rounds and continue?" (a plain 'one more round' cannot be honored
+   there). If they continue, record it:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py consulted .review-loop/ledger.json <N>`
+   — metrics then makes the NEXT thrashing signal hard automatically
+   instead of re-asking an answered question.
    Running UNATTENDED, don't wait on an answer that cannot come — take the
    default: abort with the report, then run CLOSEOUT. Anything else -> run
    CLOSEOUT if eligible, write the final report, then set
@@ -156,15 +163,29 @@ never closed out — they stopped the loop for a reason a human should see.
    closeout.
 2. ONE `implementer` dispatch scoped to exactly those findings (phase
    "round-<N>-implementing").
+2b. Before accepting the closeout CHANGES block, enforce: its verify_cmd
+   must RUN every test target the diff touches — a build is not a test
+   (`build-for-testing` once shipped a red target). Check
+   `git diff --name-only <closeout range>`; any path under a test target
+   (…Tests/, …UITests/) whose target is absent from verify_cmd -> reject
+   the block, have the implementer run it and resubmit.
 3. ONE `skeptical-reviewer` dispatch verifying ONLY those fixes: the sha
    range of the closeout commit, fragment
-   `.review-loop/fragments/round-<N>-closeout.json`, merged with round <N>.
+   `.review-loop/fragments/round-<N>-closeout.json`, merged with
+   `--no-escalate` (escalation exists to buy rounds; by closeout there are
+   none to buy, and a bump here leaves misleading state):
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .review-loop/ledger.json .review-loop/fragments/round-<N>-closeout.json <N> --no-escalate`
    This is the ONE place the full test suite runs (filtered output); rounds
    run scoped commands only.
 4. No metrics, no iteration. Fixes that fail verification go to BACKLOG.md
    with the reviewer's note — and so does any NEW finding the closeout
    reviewer opens (no further cycle; list it in the Closeout section with
-   its note). Record the whole cycle in a "Closeout" section of the report.
+   its note) — with ONE exception: an introduced_by_fix BLOCKER (e.g. the
+   tree is red) earns a single additional scoped implementer dispatch under
+   the smallest-correct-change rule, then one re-verification. If it still
+   stands (or no human is available), the report HEADLINE says
+   "done-but-red" — a red tree is never a quietly-listed open row. Record
+   the whole cycle in a "Closeout" section of the report.
 
 
 ## Waiting, failures, and pauses (the phase marker is not a binary)

@@ -137,6 +137,13 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   alone). Each plugin's hooks guard only their own loop directory.
   *In practice:* escape hatch — if a dead session leaves the guard armed,
   write `done` into it and the guard stands down.
+- **`thrashing_soft` remembers being answered** `[both]` — after a human
+  approves a continuation the orchestrator records it (`consulted` verb);
+  the next thrashing signal is hard automatically, and at max_rounds the
+  soft question becomes the only honorable one: "abort, or raise max_rounds
+  and continue". Rejection history also survives status changes now (a
+  `rejections` array the merge unions), so the report's rejection section
+  can no longer read "none" after seven real rejections.
 - **Retry and fallback policy** `[both]` — a dispatch that dies with no
   fragment is retried up to 3× with in-turn backoff (60/180/300 s); agents
   write `<fragment>.partial` incrementally so a killed dispatch leaves its
@@ -152,11 +159,16 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   `archive/` are meant to be committed. If your repo ignores the whole loop
   directory, the loop notices (`git check-ignore`) and says so rather than
   pretending — archives then live only on that machine.
-- **Minors never cost a round** `[review]` — round briefs carry blockers and
-  majors only; minors (21 of 26 findings in the measured runs) accumulate and
-  are fixed in the single closeout pass, where they were already eligible.
-  *In practice:* nothing to set. If you want minors fixed in-round for a
-  specific run, say so and the orchestrator briefs with `--severity minor`.
+- **Minors split by risk, not just cost** `[review]` — round briefs carry
+  blockers, majors, and minors flagged `fix_risk` (their fix changes shipped
+  behavior — measured: a deferred minor changed a shipped predicate on both
+  platforms inside the no-iteration closeout); plain test/doc/polish minors
+  wait for closeout. The closeout's verify_cmd must run every test target
+  its diff touches (a build is not a test), and an introduced_by_fix
+  BLOCKER there earns one extra scoped fix dispatch — otherwise the report
+  headline is "done-but-red", never a buried open row.
+  *In practice:* nothing to set; `open --severity major` includes fix_risk
+  minors automatically.
 - **Read guard** `[both]` — while a loop phase is in flight, a `PreToolUse`
   hook denies the measured token sinks with the fix in its message: `cat` of
   a >200-line file, `head`/`sed` windows over 200 lines, unfiltered

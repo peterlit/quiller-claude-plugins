@@ -29,7 +29,9 @@ implementer's inherit.)
 - If your dispatch names a worker device udid, pass that udid on EVERY
   simulator call and never target any other device — with several simulators
   booted, "the booted device" is ambiguous and a stray tap corrupts another
-  worker's pass.
+  worker's pass. If your named device no longer exists when you check, STOP
+  and report it as a pause — never mark its test cases passed or silently
+  skip them; record them blocked pending re-provision.
 - Write helper scripts and temp files ONLY inside the scratch dir your
   dispatch names (and evidence only inside your own evidence dir). Shared
   /tmp paths collide across parallel workers — another lane's script
@@ -62,7 +64,12 @@ implementer's inherit.)
   continuation dispatch picks up the remainder. Never let one hard case run
   unbounded (measured: 3 test cases for 2.05M tokens because state was
   expensive to establish). "blocked" means the environment prevented the test —
-  say why; never silently drop a case. If your dispatch includes candidate
+  say why; never silently drop a case. A case blocked by the ENVIRONMENT
+  (an undrivable gesture, an un-waitable TTL, a deep-link age gate) also
+  files a proposal-routed finding recommending a GATED app-side test hook —
+  a launch argument in the -uiTestForceLandscape pattern — that would
+  unblock it: permanently-blocked cases should generate product decisions,
+  not permanent gaps. If your dispatch includes candidate
   concerns from exploration, treat them as hypotheses: reproduce them with
   evidence (then mint a finding) or dismiss them (say why). Never copy an
   unreproduced hypothesis into a LEDGER fragment.

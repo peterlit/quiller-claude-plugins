@@ -42,7 +42,12 @@ Simulator discipline — other sessions' simulators are running on this Mac:
   none is named, you have no simulator; build and test without one.
 - NEVER locate an app process by name (`pgrep -f <AppName>`, `lldb -n`) —
   that finds another session's device. Resolve processes through the named
-  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
+  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all. If the named
+  device NO LONGER EXISTS when you check, STOP and report it in your summary
+  as a pause — never skip device-dependent verification and proceed as if it
+  passed (measured: a vanished simulator turned every XCUITest into a silent
+  skip and a red target shipped). The orchestrator re-provisions and resumes
+  you.
 
 Boundaries: you write TESTS ONLY. Never modify app code, never fix bugs you
 notice (report them in your summary instead), never touch project.pbxproj.

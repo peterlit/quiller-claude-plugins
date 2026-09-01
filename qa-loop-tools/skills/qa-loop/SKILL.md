@@ -207,6 +207,11 @@ skew every metric downstream.
    testers inject saves and fixtures, and one chunk's fixture must never be
    the next chunk's starting state (measured: a device "arrived already
    showing a Flawless streak").
+   Re-verify every worker device still exists immediately before
+   dispatching (`xcrun simctl list devices | grep <udid>`) — devices vanish
+   mid-run (another session deleted one between rounds and every XCUITest
+   became a silent skip); if one is gone, re-provision before dispatching,
+   never dispatch against a dead udid.
    Write "round-<N>-testing" to `.qa-loop/.phase` and run the FUNCTIONAL LANE.
    One dispatch per chunk manifest in the plan. Every chunk dispatch
    carries: its manifest's test cases, ONLY its workflows' findings —
@@ -315,9 +320,14 @@ skew every metric downstream.
      e. Go to round N+1.
    - `full_pass_required`: go to round N+1 with a FULL pass and NO implementer
      dispatch (nothing to fix — you are confirming convergence on this build).
-   - `thrashing_soft`: write "awaiting-human" to `.qa-loop/.phase`, STOP, and
-     ask the human: abort with the report, or run one more round? (Approved
-     continuation: one more round; a second thrashing signal then is hard.)
+   - `thrashing_soft`: write "awaiting-human" to `.qa-loop/.phase`, STOP,
+     and ask — the verdict's reason tells you which question: below the cap,
+     "abort, or one more round?"; AT max_rounds, "abort, or raise max_rounds
+     and continue?". If they continue, record it:
+     `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py consulted .qa-loop/ledger.json <N>`
+     — metrics then makes the NEXT thrashing signal hard automatically
+     (measured: a report re-asked a question the human answered a round
+     earlier).
    - anything else: stop and write the final report.
 
 

@@ -129,14 +129,17 @@ def main():
         else:
             L.append("_none_\n")
 
-    rejected = [f for f in findings if "FIX REJECTED" in (f.get("note") or "")]
     L.append("## Fix review rejections\n")
-    if rejected:
-        for f in rejected:
-            L += finding_line(f)
-        L.append("")
-    else:
-        L.append("_none_\n")
+    any_rej = False
+    for f in findings:
+        rej = f.get("rejections") or []
+        if not rej and "FIX REJECTED" in (f.get("note") or ""):
+            rej = [{"round": "?", "reason": "see note"}]
+        if rej:
+            any_rej = True
+            hist = "; ".join(f"round {r.get('round')}: {r.get('reason')}" for r in rej)
+            L.append(f"- **{f.get('id')}** ({f.get('current_status')}) — {hist}")
+    L.append("" if any_rej else "_none_\n")
 
     promos = [(f.get("id"), e) for f in findings
               for e in (f.get("severity_history") or [])]
@@ -280,21 +283,12 @@ def main():
     for rnd in sorted(shas, key=int):
         start = shas[rnd]
         end = shas.get(str(int(rnd) + 1), "HEAD")
-        try:
-            ns = subprocess.run(["git", "-C", repo, "diff", "--numstat", f"{start}..{end}"],
-                                capture_output=True, text=True, timeout=30)
-        except Exception:
-            break
-        if ns.returncode != 0:
-            continue
-        files = []
-        for line in ns.stdout.splitlines():
-            parts = line.split("\t")
-            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
-                files.append((int(parts[0]) + int(parts[1]), parts[0], parts[1], parts[2]))
+        # Through numstat(): the per-round path predated the excluding helper
+        # and leaked loop state into the WATCH LIST (measured: ledger.json
+        # listed as a round's largest change).
+        files = numstat(f"{start}..{end}")
         if not files:
             continue
-        files.sort(reverse=True)
         total = sum(f[0] for f in files)
         top = ", ".join(f"`{p}` (+{a}/-{d})" for _, a, d, p in files[:3])
         L.append(f"- **round {rnd} diff** `{start[:7]}..{end[:7] if end != 'HEAD' else 'HEAD'}` — "

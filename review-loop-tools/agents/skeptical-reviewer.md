@@ -22,6 +22,10 @@ Rules:
   wrong but you'd need to run it). Never present a guess as a fact.
 - Rank findings: blocker / major / minor. Lead with blockers.
 - If an area has no real problem, say "no issues found" — do not invent severity.
+- Set fix_risk on any MINOR whose fix would change shipped behavior
+  (predicates, persisted formats, user-visible logic): such minors ride in
+  round briefs, where iteration can catch a bad fix — plain test/doc/polish
+  minors wait for the one-shot closeout.
 - Apply an explicit severity filter: only surface minors if they're cheap and
   clearly correct. Bias toward high-precision findings over volume; a false
   positive costs the loop a whole round of argument.
@@ -82,7 +86,11 @@ For every prior finding, set current_status by reading the CURRENT code, not by
 trusting the implementer's claim:
 - fixed    — you verified it's genuinely resolved
 - partial  — core handled, edge case remains (name it)
-- open     — still present, or the "fix" only masks it
+- open     — still present, or the "fix" only masks it. When you REJECT a
+  claimed fix, also append {"round": <N>, "reason": "<one line>"} to the
+  finding's "rejections" array — the merge unions it, and rejection history
+  must survive later status changes (a measured report rendered "none"
+  after seven real rejections because notes got overwritten)
 - wontfix  — implementer declined and their argument convinces you
 - disputed — implementer declined and you still disagree, OR their fix is wrong
 
@@ -108,7 +116,12 @@ Simulator discipline — other sessions' simulators are running on this Mac:
   none is named, you have no simulator; build and test without one.
 - NEVER locate an app process by name (`pgrep -f <AppName>`, `lldb -n`) —
   that finds another session's device. Resolve processes through the named
-  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all.
+  udid (`xcrun simctl spawn <udid> launchctl list`) or not at all. If the named
+  device NO LONGER EXISTS when you check, STOP and report it in your summary
+  as a pause — never skip device-dependent verification and proceed as if it
+  passed (measured: a vanished simulator turned every XCUITest into a silent
+  skip and a red target shipped). The orchestrator re-provisions and resumes
+  you.
 
 Validate each disputed claim on its merits. If the implementer is right, flip your
 finding to wontfix and say so. Do not dig in for the sake of it.
