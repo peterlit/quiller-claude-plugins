@@ -8,6 +8,10 @@ Plugins by Peter Litskevitch.
 | [qa-loop-tools](qa-loop-tools/) | Simulator-driven UX/QA convergence loop over the *running iOS app*: persona-based testing with evidence-backed findings. |
 | [arch-docs-tools](arch-docs-tools/) | Evidence-grounded architecture documentation for any repo, with automatic per-deliverable splitting and scripted diagram/coverage validation. |
 
+Maintaining this repo (releases, script sync, the feedback cycle)?
+Start with [HANDOFF.md](HANDOFF.md) — the maintainer's guide to how this
+project is actually developed.
+
 Operating either loop? [CONTROLS.md](CONTROLS.md) is the shared reference —
 every knob, where it lives, and how to use it in practice. It also ships
 inside each plugin and is available in-session via
