@@ -50,7 +50,13 @@ process is the most important thing to preserve:
 1. **Bump `plugin.json` version on every user-visible change.** The plugin
    cache is keyed by version; an unchanged version means installed users
    silently never receive the update. Marketplace entries in
-   `.claude-plugin/marketplace.json` never carry versions.
+   `.claude-plugin/marketplace.json` never carry versions. Related: the
+   loop-dir `.gitignore` allowlist templates embedded in the two SKILL.md
+   bootstrap steps carry a `Managed by <plugin> vX.Y.Z` stamp naming the
+   release that last changed the template — when a release adds a new
+   durable output name, add its negation to the template and update the
+   stamp in the same release (the definition of "conclusion" stays versioned
+   with the code that produces it).
 2. **Shared scripts are authored in `review-loop-tools/scripts/` and cp-synced
    byte-identical to `qa-loop-tools/scripts/`**: `merge_ledger.py`,
    `render_report.py`, `loop_guard.sh`, `subagent_guard.sh`, `read_guard.sh`,

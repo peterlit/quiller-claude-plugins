@@ -42,9 +42,16 @@ findings, and a WATCH LIST.
 All state lives in the **target repository** under `.review-loop/`:
 `ledger.json` (findings ledger), `rounds.md` (per-round trend table), and
 `REPORT.md` (final report). Nothing is stored in the plugin directory, so
-findings never bleed between projects. The loop writes its own
-`.review-loop/.gitignore` (`fragments/`, `briefs/`, `.phase`); the ledger,
-trend table, report, and `archive/` are meant to be committed. Each new loop
+findings never bleed between projects. Conclusions in git, evidence and
+scratch on disk: the loop writes a default-closed allowlist
+`.review-loop/.gitignore` — only `REPORT.md`, `ledger.json`, `rounds.md`,
+and `verdict.json` are tracked (at any depth, so archived conclusions under
+`archive/<name>/` stay in git), while fragments, briefs, and anything
+unanticipated (a Finder-duplicated `ledger 2.json`, say) never enter the
+index. Staging is by explicit file path — a hook blocks `git add -A`/`.`/
+`-f`/directory adds while a loop is live — and a hygiene check at setup and
+report time flags tracked scratch, duplicate names, and oversized files.
+Each new loop
 archives the previous run's state into `.review-loop/archive/<name>/`
 automatically, and after any stop a **closeout** cycle fixes and re-verifies
 leftover cheap findings (the loop's own `introduced_by_fix` regressions and

@@ -65,7 +65,11 @@ After making changes:
   "line"(optional), "expect": "killed|survived"}]}` — and name it in CHANGES
   as "mutations". The reviewer re-runs it in an isolated worktree; "8/8
   killed" without a manifest is treated as an unverified claim.
-- Commit with message: "review-loop round <N>: <one-line summary>".
+- Stage by EXPLICIT FILE PATH — never `git add -A`/`--all`, `git add .`,
+  `git add -f`, or a directory add touching `.review-loop/` (a hook blocks
+  these during the loop; the loop-dir `.gitignore` allowlist decides what
+  belongs in git, and directory adds are how scratch entered a host repo's
+  history). Commit with message: "review-loop round <N>: <one-line summary>".
 
 Return a fenced ```json CHANGES block, then a short prose summary. Do not omit
 the JSON block.

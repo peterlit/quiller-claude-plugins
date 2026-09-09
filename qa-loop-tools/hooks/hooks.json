@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/commit_guard.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/commit_guard.sh .qa-loop"
           },
           {
             "type": "command",

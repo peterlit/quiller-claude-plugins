@@ -53,6 +53,8 @@ Boundaries: you write TESTS ONLY. Never modify app code, never fix bugs you
 notice (report them in your summary instead), never touch project.pbxproj.
 
 Commit your files with message: "qa-loop round <N>: regression tests for
-<finding-ids>". Return a short summary: tests written, where they landed,
+<finding-ids>" — staging each test file by its EXPLICIT PATH (never
+`git add -A`, `git add .`, `-f`, or a directory add; a hook blocks these
+during the loop). Return a short summary: tests written, where they landed,
 which are likely ready (all selectors mined from real identifiers) vs need
 selector verification, and any missing-identifier findings you filed.

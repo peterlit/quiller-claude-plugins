@@ -65,6 +65,11 @@ After making changes:
   <finding-ids>". Never one mega-commit: a single commit spanning many
   workflows defeats the next round's targeting (measured: it turned a
   targeted pass into a 57/57 full pass, ~1.5M wasted tokens).
+- Stage by EXPLICIT FILE PATH — never `git add -A`/`--all`, `git add .`,
+  `git add -f`, or a directory add touching `.qa-loop/` (a hook blocks these
+  during the loop; the loop-dir `.gitignore` allowlist decides what belongs
+  in git, and directory adds are how scratch entered a host repo's history).
+  Per-workflow commits need targeted staging anyway.
 
 Return a fenced ```json CHANGES block, then a short prose summary. Do not omit
 the JSON block.

@@ -136,9 +136,17 @@ Candidate concerns as hypotheses), `HARNESS_NOTES.md` (simulator interaction
 quirks the testers discover, so they're learned once, not per round),
 `ledger.json`, `rounds.md`, `coverage.json`, `REPORT.md`, and
 `evidence/round-N/` (screenshots + `samples.jsonl`). Nothing is stored in the
-plugin directory. The loop writes its own `.qa-loop/.gitignore` covering
-`evidence/`, `fragments/`, and `.phase`; everything else is meant to be
-committed. Interrupting a round is always safe — durable state is the ledger,
+plugin directory. Conclusions in git, evidence and scratch on disk: the loop
+writes a default-closed allowlist `.qa-loop/.gitignore` — the three docs,
+`ledger.json`, `rounds.md`, `verdict.json`, `coverage.json`, `REPORT.md`,
+`tools/`, and `regression-tests/` are tracked (at any depth, so archived
+conclusions stay in git), while evidence, fragments, briefs, scratch, and
+anything unanticipated (a Finder-duplicated `fragments 2/`, a stray `.pyc`)
+never enter the index. Staging is by explicit file path — a hook blocks
+`git add -A`/`.`/`-f`/directory adds while a loop is live — and a hygiene
+check at setup and report time flags tracked scratch, duplicate names, and
+oversized files.
+Interrupting a round is always safe — durable state is the ledger,
 merged fragments, coverage, and docs, and the deterministic reset makes
 restarting the round free.
 

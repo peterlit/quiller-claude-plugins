@@ -47,7 +47,13 @@ subagents. You are PLUMBING ONLY.
   For waits that are not a subagent, use `…:waiting:<reason>` (see
   Waiting, failures, and pauses).
 - All loop state lives in the TARGET REPO at `.qa-loop/`. Never write it into
-  the plugin directory. Suggest adding `.qa-loop/evidence/` to .gitignore.
+  the plugin directory.
+- Conclusions in git, evidence and scratch on disk — the loop-dir `.gitignore`
+  allowlist (written at Stage 1) is the definition. Stage loop files by
+  EXPLICIT PATH only: never `git add -A`/`--all`, `git add .`, `git add -f`,
+  or a directory add of `.qa-loop` (a hook blocks these while a loop is live —
+  directory adds are how a committed `fragments 2/` and a gigabyte of
+  evidence risk entering a host repo's history).
 - While any tester dispatch is in flight, NOBODY touches a simulator — no
   screenshots, taps, or launches from you. Preflight interactions happen
   strictly BEFORE dispatch; evidence gathering is the tester's job. A stray
@@ -97,13 +103,44 @@ tester rebuild a driver from scratch.
    roles like tester-wf2-1 with set-usage, or add-usage for a shared role.
    The BUDGET stop fires when the sum crosses the budget; null disables.)
    (use the user's max_rounds and parallel_testers if they gave them; cap
-   parallel_testers at 3 — each simulator wants 2-6GB of RAM). Also write
-   `.qa-loop/.gitignore` containing exactly these five lines:
-   `evidence/`, `fragments/`, `briefs/`, `scratch/`, `.phase` — everything
-   else in `.qa-loop/`
-   (WORKFLOWS.md, TESTCASES.md, HARNESS_NOTES.md, ledger.json, rounds.md,
-   coverage.json, REPORT.md) is meant to be committed — unless
-   `git check-ignore -q .qa-loop` says the repo ignores the directory; then
+   parallel_testers at 3 — each simulator wants 2-6GB of RAM). Then run the
+   hygiene preflight —
+   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_check.sh .qa-loop`
+   (advisory, always exits 0) — and act on every line it prints:
+   `git rm --cached` tracked scratch (NEVER delete from disk); when a
+   Finder-duplicate name (`ledger 2.json`, `fragments 2/`) exists and the
+   plain name is missing, the duplicate IS the real file — `mv` it back, and
+   never write to a space-suffixed name. On the `.gitignore` itself: if it
+   is missing, the plugin's own old five-line denylist (`evidence/`,
+   `fragments/`, `briefs/`, `scratch/`, `.phase`), or an earlier "Managed by
+   qa-loop-tools" allowlist, write exactly this default-closed allowlist;
+   any OTHER pre-existing `.gitignore` is the host's — leave it and suggest
+   the upgrade in one line:
+   ```
+   # Conclusions in git; evidence and scratch on disk. Managed by qa-loop-tools v0.12.0.
+   *
+   !*/
+   !.gitignore
+   !REPORT.md
+   !ledger.json
+   !rounds.md
+   !verdict.json
+   !coverage.json
+   !WORKFLOWS.md
+   !TESTCASES.md
+   !HARNESS_NOTES.md
+   !harness-notes-*.md
+   !tools/**
+   !regression-tests/**
+   __pycache__/
+   *.pyc
+   ```
+   Conclusions are re-included by exact name at ANY depth — so
+   `archive/<name>/ledger.json` and `archive/harness-notes-<ts>.md` stay
+   tracked while archived `fragments/`, `briefs/`, evidence, and
+   Finder-duplicate names never enter the index (the trailing two rules keep
+   `tools/**` from re-admitting bytecode). Check
+   `git check-ignore -q .qa-loop`: if the repo ignores the directory,
    say so at the gate and in the report instead of claiming otherwise, and
    at the end append one line to the repo-root BACKLOG.md naming the
    archive path — in an ignored tree that pointer is what survives.
@@ -417,6 +454,10 @@ the sections mean, for your WATCH LIST judgment:
   one-line "look here because…". This is the part a human should actually
   read: the fix-reviewer decorrelates the loop's blind spots but cannot
   eliminate them.
+Re-run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_check.sh .qa-loop` — any
+violation still standing goes into the WATCH LIST as its own line (tracked
+scratch, duplicate names, oversized files must not sit unnoticed in the host
+repo's index).
 Print a one-line verdict and the path to the report, and set
 `.qa-loop/.phase` to "done". If worker simulators exist, tear them down:
 `${CLAUDE_PLUGIN_ROOT}/scripts/provision_workers.sh down`

@@ -34,6 +34,11 @@ You orchestrate an iterative review loop between the `implementer` and
   use `…:waiting:<reason>` (see Waiting, failures, and pauses).
 - All loop state lives in the TARGET REPO at `.review-loop/`. Never write it into
   the plugin directory.
+- Conclusions in git, evidence and scratch on disk — the loop-dir `.gitignore`
+  allowlist (written at Setup) is the definition. Stage loop files by EXPLICIT
+  PATH only: never `git add -A`/`--all`, `git add .`, `git add -f`, or a
+  directory add of `.review-loop` (a hook blocks these while a loop is live —
+  directory adds are how a committed `fragments 2/` happened in a host repo).
 - NEVER override an agent's pinned model in a dispatch (the Agent tool's
   model parameter): pins carry the diversity guarantees and keep run-to-run
   cost numbers comparable.
@@ -67,10 +72,32 @@ You orchestrate an iterative review loop between the `implementer` and
    max_rounds is 2 bumps max_rounds to 5 and reports "escalated_max_rounds";
    announce it when you see it). Cold reviews keep 5. token_budget is a
    hard ceiling on cumulative subagent tokens (BUDGET stop); leave null to
-   disable. Also write
-   `.review-loop/.gitignore` containing exactly these three lines:
-   `fragments/`, `briefs/`, `.phase` — ledger.json, rounds.md, REPORT.md,
-   and archive/ are meant to be committed. Check `git check-ignore -q
+   disable. Then run the hygiene preflight —
+   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_check.sh .review-loop`
+   (advisory, always exits 0) — and act on every line it prints:
+   `git rm --cached` tracked scratch (NEVER delete from disk); when a
+   Finder-duplicate name (`X 2.json`, `fragments 2/`) exists and the plain
+   name is missing, the duplicate IS the real file — `mv` it back, and never
+   write to a space-suffixed name. On the `.gitignore` itself: if it is
+   missing, the plugin's own old three-line denylist (`fragments/`,
+   `briefs/`, `.phase`), or an earlier "Managed by review-loop-tools"
+   allowlist, write exactly this default-closed allowlist; any OTHER
+   pre-existing `.gitignore` is the host's — leave it and suggest the
+   upgrade in one line:
+   ```
+   # Conclusions in git; evidence and scratch on disk. Managed by review-loop-tools v0.10.0.
+   *
+   !*/
+   !.gitignore
+   !REPORT.md
+   !ledger.json
+   !rounds.md
+   !verdict.json
+   ```
+   Conclusions are re-included by exact name at ANY depth — so
+   `archive/<name>/ledger.json` stays tracked while archived `fragments/`,
+   `briefs/`, and Finder-duplicate names (`ledger 2.json`) never enter the
+   index. Check `git check-ignore -q
    .review-loop`: if the repo ignores the whole directory, say so now and in
    the report ("loop state is not versioned in this repo") instead of
    claiming otherwise — and at the end, append one line to the repo-root
@@ -244,7 +271,11 @@ WATCH LIST: fill each candidate's "look here because…" slot and add the 3-5
 most invasive diffs across all rounds (largest, touching core paths, or
 introduced_by_fix) with their commits. That list is the part a human should
 actually read, because the loop cannot catch two same-family agents agreeing
-on a wrong fix. Print a one-line verdict and the path to the report.
+on a wrong fix. Re-run
+`bash ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_check.sh .review-loop` — any
+violation still standing goes into the WATCH LIST as its own line (tracked
+scratch, duplicate names, oversized files must not sit unnoticed in the host
+repo's index). Print a one-line verdict and the path to the report.
 
 ## Contracts (canonical fields and verbs)
 A finding's live status is `current_status`; a field named `status` exists
@@ -269,9 +300,14 @@ merge_ledger.py's verbs:
 The CHANGES block carries `verify_cmd` (scoped tests the reviewer reruns).
 Hooks active during a loop: `read_guard` denies whole-file dumps,
 unfiltered test runs, and whole-diff re-pulls (with the fix in the message);
+`commit_guard` blocks `git add -A`/`--all`/`.`/`-f` and loop-dir directory
+adds while a loop is live (stage by explicit path), and enforces the
+optional env knobs on commits;
 `dispatch_stamp` marks `:dispatched` when you call the Agent tool;
 `session_guard` reports the session transcript size when a loop is invoked.
 Merges record severity changes in `severity_history` (the Promoted column).
 Other scripts: `render_report.py <loop-dir>` (the report), `hotspots.py`
 (cold-review map), `mutate.py <manifest>` (re-run an implementer's mutation
-claims in an isolated worktree).
+claims in an isolated worktree), `hygiene_check.sh <loop-dir>` (advisory
+git-hygiene report: tracked scratch, Finder-duplicate names, oversized
+tracked files, denylist-style ignores — run at Setup and before the report).

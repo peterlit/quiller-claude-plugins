@@ -153,12 +153,25 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   the same agent is resumed, never re-dispatched.
   *In practice:* nothing to configure; if you see "ran on <model>: outage"
   in a report, that round's adversarial diversity was reduced.
-- **What to commit** `[both]` — each loop writes its own `.gitignore`
-  (`evidence/`, `fragments/`, `briefs/`, `scratch/`, `.phase` stay out);
-  WORKFLOWS, TESTCASES, HARNESS_NOTES, ledger, rounds, coverage, REPORT, and
-  `archive/` are meant to be committed. If your repo ignores the whole loop
+- **What to commit** `[both]` — conclusions in git, evidence and scratch on
+  disk; the loop-dir `.gitignore` each loop writes is the definition. It is
+  DEFAULT-CLOSED (`*`, `!*/`, then one negation per conclusion: REPORT,
+  ledger, rounds, verdict — qa adds coverage, the three docs, `tools/`,
+  `regression-tests/`), so anything unanticipated — a Finder-duplicated
+  `fragments 2/`, a stray `.pyc`, a gigabyte of screenshots — stays out of
+  the index by default (measured: the old denylist let all three into one
+  host repo's history). Negations match at any depth, so conclusions inside
+  `archive/<name>/` stay tracked while archived scratch does not. A
+  pre-existing host `.gitignore` is never overwritten — the loop suggests
+  the upgrade instead. While a loop is live, the commit guard denies
+  `git add -A`/`--all`/`.`/`-f` and bare loop-dir adds: staging is by
+  explicit file path. If your repo ignores the whole loop
   directory, the loop notices (`git check-ignore`) and says so rather than
   pretending — archives then live only on that machine.
+  *In practice:* nothing to set; if `hygiene_check.sh` flags a violation at
+  setup the loop fixes it (`git rm --cached`, duplicate renames — never
+  disk deletes), and anything still standing at report time lands in the
+  WATCH LIST.
 - **Minors split by risk, not just cost** `[review]` — round briefs carry
   blockers, majors, and minors flagged `fix_risk` (their fix changes shipped
   behavior — measured: a deferred minor changed a shipped predicate on both
@@ -193,7 +206,10 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   ≤5-test-case chunk manifests from `paths(WF-n)` lines in WORKFLOWS.md and
   `TC-x.y [persona] [smoke] [perf]` lines in TESTCASES.md; `nfr_analyze.py`
   turns sampler output plus the tester's `marks.jsonl` windows into numbers
-  and candidate findings.
+  and candidate findings. `[both]` `hygiene_check.sh <loop-dir>` reports
+  git-hygiene violations in the loop dir (tracked scratch, Finder-duplicate
+  names, >256KB tracked files, denylist-style ignores) — advisory, run at
+  setup and again before the report.
   *In practice:* you don't run these yourself — they are why the loops got
   cheaper. The two obligations they create: every workflow needs a
   `paths(WF-n): …` line (the orchestrator writes it at Stage 1), and every
