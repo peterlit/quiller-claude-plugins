@@ -35,8 +35,12 @@ frag_dir = sys.argv[1]
 VALID_TC = {"passed", "failed", "blocked", "skipped"}
 # Only police files the merge will actually consume; orchestrator briefs and
 # other artifacts in this directory are not ours to validate (they belong in
-# briefs/ anyway).
+# briefs/ anyway). Panel files have their own contracts and no ledger IDs:
+# *.candidates.json (external finders) and *.verified.json (panel-verifier)
+# are deliberately NOT ledger fragments — policing them here would block
+# every panel round.
 FRAGMENT_NAME = re.compile(r"(seed|round-[A-Za-z0-9._-]+)\.json")
+PANEL_NAME = re.compile(r".*\.(candidates|verified)\.json")
 known = set()
 ledger_path = os.path.join(os.path.dirname(frag_dir), "ledger.json")
 if os.path.exists(ledger_path):
@@ -46,7 +50,7 @@ if os.path.exists(ledger_path):
     except Exception:
         pass
 for name in sorted(os.listdir(frag_dir)):
-    if not FRAGMENT_NAME.fullmatch(name):
+    if not FRAGMENT_NAME.fullmatch(name) or PANEL_NAME.fullmatch(name):
         continue
     path = os.path.join(frag_dir, name)
     try:
