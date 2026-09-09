@@ -30,6 +30,9 @@ def finding_line(f):
         bits.append(f"fix_risk `{f['fix_risk']}`")
     if f.get("introduced_by_fix"):
         bits.append("introduced_by_fix")
+    if f.get("source"):
+        srcs = f.get("sources") or [f["source"]]
+        bits.append("via " + "+".join(srcs))
     out = ["- " + "; ".join(bits)]
     if f.get("claim"):
         out.append(f"  - {f['claim']}")
@@ -94,6 +97,25 @@ def main():
             roles = "; ".join(f"{r} {v:,}" for r, v in sorted(usage[rk].items()))
             L.append(f"| {rk} | {roles} | {sum(usage[rk].values()):,} |")
         L.append(f"| **all** | | **{sum(sum(v.values()) for v in usage.values()):,}** |")
+        L.append("")
+
+    panel = ledger.get("panel") or {}
+    if panel:
+        L.append("## Panel (multi-provider reviewers)\n")
+        L.append("_Per-lane precision — the drop-or-keep signal. Rejected "
+                 "candidates are counts only; confirmed ones appear among the "
+                 "findings tagged `via panel:<lane>`._\n")
+        L.append("| Round | Lane | Filed | Confirmed | Demoted | Rejected | Kept rate |")
+        L.append("|---|---|---:|---:|---:|---:|---:|")
+        # Numeric rounds in order; labels ("final") after them.
+        for rk in sorted(panel, key=lambda k: (0, int(k)) if k.isdigit() else (1, 0)):
+            for lane in sorted(panel[rk]):
+                t = panel[rk][lane]
+                filed = t.get("filed", 0)
+                kept = t.get("confirmed", 0) + t.get("demoted", 0)
+                rate = f"{kept}/{filed}" if filed else "—"
+                L.append(f"| {rk} | {lane} | {filed} | {t.get('confirmed', 0)} | "
+                         f"{t.get('demoted', 0)} | {t.get('rejected', 0)} | {rate} |")
         L.append("")
 
     L.append("## Open findings by severity\n")

@@ -216,6 +216,34 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   test case line must start `TC-x.y [persona]` with optional `[smoke]` /
   `[perf]` tags.
 
+## Review panel (multi-provider)
+
+*Surface: `.review-loop/panel.json`, offered at Setup when the CLIs exist.*
+
+- **What it is** `[review]` — external models (OpenAI's codex CLI, Google's
+  gemini CLI, a local ollama model) review the diff as extra skeptics. They
+  are FINDERS only: candidates go to the blind `panel-verifier` agent
+  (pinned `sonnet`), and only chair-verified findings reach the ledger, so
+  metrics and convergence math are untouched. Runs on the seed diff (SCOPE
+  mode) and once after any stop on the accumulated change (`seed+final`).
+  *In practice:* ask for "a panel" when starting a loop; the setup gate
+  probes which lanes are installed and authenticated
+  (`panel_review.py probe --smoke`) and asks for consent.
+- **Consent and privacy** `[review]` — codex/gemini lanes send the diff off
+  the machine; `panel.json` records `consent.remote_lanes_approved` per
+  repo and the script refuses remote lanes without it. Gemini's free OAuth
+  tier may train on inputs — use API keys (`OPENAI_API_KEY`,
+  `GEMINI_API_KEY`, environment only, never in panel.json). Private repo →
+  local lane only (ollama, nothing leaves the machine, no account).
+- **Flood control and measurement** `[review]` — each lane files at most 10
+  candidates by confidence; the report's Panel section shows per-lane
+  filed/confirmed/demoted/rejected, and that kept-rate is the drop-or-keep
+  signal for each lane. Lane failures (timeout, auth expiry, outage) are
+  soft: skipped with disclosure, never blocking a round.
+  *In practice:* confirmed findings appear in the report tagged
+  `via panel:<lane>`; a finding tagged with several lanes is cross-family
+  agreement — read it first.
+
 ## Model pins
 
 *Surface: `agents/*.md` frontmatter.*

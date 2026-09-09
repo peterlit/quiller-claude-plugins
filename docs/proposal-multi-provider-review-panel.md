@@ -1,6 +1,24 @@
 # Proposal: Multi-provider review panel for review-loop-tools
 
-*Refreshed 2026-09-08. Status: for review — nothing implemented.*
+*Refreshed 2026-09-08. Decisions recorded 2026-09-09. Status: phase 1
+implemented (review-loop-tools 0.11.0) — awaiting commit approval. Rollback
+point: tag `pre-multi-provider-panel` (= `0a75e47`).*
+
+## Decisions (2026-09-09)
+
+The four open questions were answered by the maintainer:
+
+1. **Panel rounds: `seed+final`.** The final-round panel exists to catch
+   fix-introduced regressions the Anthropic family might share with the
+   implementer.
+2. **Candidate rejections: counts only.** Rejected candidates never earn a
+   ledger ID; they appear solely in the Panel report section's per-lane
+   tallies.
+3. **Verification: separate blind verifier from v1.** The chair never reads
+   raw candidates; a dedicated verifier agent adjudicates them (design
+   below).
+4. **Scope: review-loop only.** qa-loop is out — simulator evidence doesn't
+   travel to external CLIs.
 
 ## The gap, in the plugin's own words
 
@@ -30,23 +48,34 @@ External reviewers therefore run as headless CLI processes dispatched via
 Bash — not the Agent tool — reading the same briefs and writing candidate
 files next to the fragments.
 
-## Core design: finders and a chair
+## Core design: finders, a blind verifier, and the chair
 
 The single most important decision: **external reviewers only propose NEW
 findings. They never touch ledger status.** The pinned Anthropic
-skeptical-reviewer remains the sole ledger owner — it mints IDs, sets
-`current_status`, tracks rejections, and files the one fragment that
-merges. This keeps every invariant intact:
+skeptical-reviewer (the chair) remains the sole ledger owner — it mints
+IDs, sets `current_status`, tracks rejections, and files the one fragment
+that merges. This keeps every invariant intact:
 
 - The ledger schema and status rules (`current_status`, `status_history`,
   `rejections` unions) are subtle; external models won't follow them
   reliably, and we shouldn't ask them to.
 - Metrics, thrashing detection, and convergence math are untouched — only
-  chair-verified findings enter the ledger, so the panel is purely
-  additive and cannot destabilize the loop's control theory.
+  verified findings enter the ledger, so the panel is purely additive and
+  cannot destabilize the loop's control theory.
 - The merge path stays single-fragment per round. No merge changes needed.
 
-Flow per panelled round:
+Per decision 3, candidate adjudication is a **separate blind-verifier
+agent**, not the chair. A new small agent, `panel-verifier` (pinned
+`sonnet` — distinct from the chair's `opus` pin and, per the existing pin
+rule, it must stay distinct from the session model too), receives the
+candidate files plus the round's stat/diff paths, verifies each claim
+against the actual code, and writes
+`fragments/round-N-panel.verified.json`: confirmed findings only, each
+carrying `source: "panel:<lane>"` and per-lane reject/demote counts in a
+summary block. The chair never sees raw candidates at all — anchoring is
+prevented structurally, not by prompt ordering.
+
+Flow per panelled round (seed and final):
 
 1. Orchestrator materializes the diff as today (`diff` verb).
 2. `panel_review.sh` launches each configured lane in parallel
@@ -54,18 +83,13 @@ Flow per panelled round:
    `fragments/round-N-<lane>.candidates.json` — a *simplified* schema:
    `claim`, `evidence` (file:line), `severity`, `confidence`, `area`.
    No IDs, no status, no history.
-3. The chair (skeptical-reviewer) is dispatched as today, with one
-   addition to its brief: the candidate file paths, labeled "claims from
-   other reviewers — verify each against the code; confirm, demote, or
-   reject." Confirmed candidates enter its fragment with a
-   `source: "panel:<lane>"` field; rejections are counted per lane.
+3. The `panel-verifier` is dispatched with the candidate files and diff
+   paths; it emits the verified file with per-lane tallies. The chair is
+   dispatched as today — its own pass is fully independent — with one
+   brief addition: the *verified* file path, labeled "panel findings,
+   already code-verified; fold in with their source attribution, dedupe
+   against your own findings, do not re-litigate."
 4. Merge and metrics proceed unchanged.
-
-**Anchoring guard**: the chair's prompt orders its work — do your own
-independent pass FIRST, then open the candidate files. Candidates are
-always labeled unverified claims, same as the implementer's CHANGES
-block. (A v2 option if anchoring shows up anyway: a separate cheap
-verifier agent adjudicates candidates so the chair stays blind.)
 
 **Timeout is soft**: a lane that hangs, rate-limits, or auth-fails is
 skipped with a note in the report — never blocks the round. Same spirit
@@ -96,8 +120,78 @@ skeptical-reviewer.md (guilty until proven correct, file:line evidence,
 concrete failure modes, no praise, severity definitions,
 CONFIRMED-vs-SUSPECTED honesty), plus the candidate JSON schema and a
 **hard cap: top 10 findings by confidence**. The cap is the flood
-control — a false positive costs the chair verification time, and an
+control — a false positive costs the verifier time, and an
 adversarially-prompted external model will over-file without it.
+
+## Authentication guidance per lane
+
+What each provider option needs before its lane can run, and what it
+means for unattended loops and data handling. Everything here is
+account-level setup the *human* does once; the loop only probes that
+credentials already work.
+
+### OpenAI — Codex CLI
+
+Install: `npm install -g @openai/codex` (or `brew install codex`).
+Credentials are cached in `~/.codex/`.
+
+- **Option A — ChatGPT sign-in** (`codex login`, browser OAuth): uses a
+  ChatGPT Plus/Pro/Team/Enterprise subscription's included quota. No
+  per-token billing. The OAuth session expires periodically and renewing
+  it needs a browser — a mid-loop expiry kills the lane (softly, per the
+  timeout rule, but it kills it).
+- **Option B — API key** (`OPENAI_API_KEY`, or `codex login --api-key`):
+  usage-based billing on the OpenAI platform. No interactive renewal;
+  **recommended for the loop** because dispatches are headless.
+- Data handling: the API does not train on inputs by default. For
+  ChatGPT-subscription auth, training use follows the account's data
+  settings — verify the opt-out before pointing it at private code.
+
+### Google — Gemini CLI
+
+Install: `npm install -g @google/gemini-cli`. Credentials cache in
+`~/.gemini/`.
+
+- **Option A — Google sign-in** (OAuth, free tier): generous request
+  limits at zero cost, but the free consumer tier's terms allow Google to
+  use submitted content to improve its services — **do not use this tier
+  on private code**. Workspace accounts may also require
+  `GOOGLE_CLOUD_PROJECT` to be set.
+- **Option B — AI Studio API key** (`GEMINI_API_KEY`): the *paid* API
+  tier does not train on inputs; the unpaid API tier has the same caveat
+  as Option A. **Recommended for the loop**: paid key, headless-safe.
+- **Option C — Vertex AI**: `GOOGLE_GENAI_USE_VERTEXAI=true` plus GCP
+  project and Application Default Credentials
+  (`gcloud auth application-default login`). Enterprise data terms and
+  billing; the right choice if the code already lives under a GCP org
+  policy. ADC tokens refresh non-interactively once established.
+
+### Local — Ollama
+
+No authentication at all, which is the lane's reason to exist:
+`brew install ollama`, run the app or `ollama serve`, then
+`ollama pull qwen3-coder:30b` (or chosen model). The loop talks to
+`localhost:11434`; nothing leaves the machine, no account, no billing.
+Sizing note: a 30B-class coder model wants ~20+ GB of RAM; smaller pulls
+(7–8B) run anywhere but drop precision further.
+
+### Loop-side rules that follow from the above
+
+- **Setup-gate probe**: before offering a lane, verify auth *works now* —
+  `codex login status` (or a one-token `codex exec` smoke call),
+  a trivial `gemini -p "ok"` call, and `curl -s localhost:11434/api/tags`.
+  A lane that would require an interactive browser login mid-loop is
+  offered as "needs re-auth first"; the human runs the login in-session
+  (`! codex login`) before the loop starts.
+- **Recommend API-key auth for both remote lanes** in the gate text:
+  subscription OAuth is fine for attended experiments, but the loop is a
+  headless consumer and token expiry mid-run degrades the panel silently
+  (well — disclosed, but degraded).
+- **Keys live in the environment, never in `panel.json`** — the config
+  names the env var, not the value, and `panel.json` stays committable
+  under the loop-dir allowlist rules.
+- The privacy consent line at the gate now has teeth: it can state per
+  lane whether the configured auth tier trains on inputs.
 
 ## Configuration
 
@@ -105,37 +199,41 @@ adversarially-prompted external model will over-file without it.
   ```json
   {
     "lanes": [
-      {"name": "codex",  "cmd": "codex exec ...",   "timeout_s": 600, "mode": "agentic"},
-      {"name": "gemini", "cmd": "gemini -p ...",     "timeout_s": 600, "mode": "agentic"},
+      {"name": "codex",  "cmd": "codex exec ...",   "auth_env": "OPENAI_API_KEY", "timeout_s": 600, "mode": "agentic"},
+      {"name": "gemini", "cmd": "gemini -p ...",     "auth_env": "GEMINI_API_KEY", "timeout_s": 600, "mode": "agentic"},
       {"name": "local",  "model": "qwen3-coder:30b", "timeout_s": 900, "mode": "diff-only", "max_diff_tokens": 32000}
     ],
-    "rounds": "seed"
+    "rounds": "seed+final"
   }
   ```
 - **Detection at the gate**: Setup probes `command -v codex`,
   `command -v gemini`, `curl -s localhost:11434/api/tags`, and offers the
   available lanes. Nothing runs without the human turning it on.
-- **`rounds` knob**: `"seed"` (default) | `"seed+final"` | `"all"`.
-  Recommendation: seed-only. Breadth matters most in the seed review,
-  where the finding set is born; per-round fix verification is chair
-  work, and panelling every round multiplies external cost for findings
-  the chair would catch anyway. `"all"` exists for pre-release audits.
+- **`rounds` knob**: `"seed+final"` (default, per decision 1) | `"seed"` |
+  `"all"`. Seed is where the finding set is born; final catches
+  fix-introduced regressions the chair's family might share with the
+  implementer. `"all"` exists for pre-release audits; `"seed"` for cost
+  control.
 - **Privacy consent is explicit and per-repo**: the gate states plainly
   that the codex/gemini lanes send the diff (and, in agentic mode, any
-  file the tool reads) to OpenAI/Google. Private repo → local lane only.
-  This is a one-time recorded answer in panel.json, not a silent default.
+  file the tool reads) to OpenAI/Google, and whether the configured auth
+  tier trains on inputs. Private repo → local lane only. This is a
+  one-time recorded answer in panel.json, not a silent default.
 
 ## Report and measurement
 
 - Findings carry `source` (`"panel:gemini"` etc.; absent = chair's own).
   `render_report.py` gains a **Panel** section: per lane, candidates
   filed / confirmed / demoted / rejected — i.e., measured precision per
-  lane per run. That is the drop-or-keep signal: a lane whose confirmed
-  rate stays low across runs isn't earning its verification cost.
-- Usage: chair verification cost lands in the existing `set-usage` feed.
-  External lanes bill outside Anthropic tokens; record wall-clock and a
-  per-lane note in the report rather than pretending the token ledgers
-  are commensurable. `token_budget` semantics unchanged.
+  lane per run (counts only, per decision 2 — rejected candidates never
+  enter the ledger). That is the drop-or-keep signal: a lane whose
+  confirmed rate stays low across runs isn't earning its verification
+  cost.
+- Usage: verifier and chair costs land in the existing `set-usage` feed
+  (verifier under role `panel-verifier`). External lanes bill outside
+  Anthropic tokens; record wall-clock and a per-lane note in the report
+  rather than pretending the token ledgers are commensurable.
+  `token_budget` semantics unchanged.
 - The WATCH LIST guidance updates honestly: a finding confirmed
   independently by two-plus families is *higher* confidence; a run where
   the panel filed nothing the chair hadn't found is *evidence the pins
@@ -143,43 +241,44 @@ adversarially-prompted external model will over-file without it.
 
 ## Risks and their mitigations
 
-- **False-positive flood** → top-10-by-confidence cap, chair rejects
+- **False-positive flood** → top-10-by-confidence cap, verifier rejects
   cheaply, per-lane precision in the report, drop persistently weak lanes.
-- **Chair anchoring / lazy confirmation** → own-pass-first prompt
-  ordering; candidates labeled unverified; v2 blind-verifier option.
+- **Chair anchoring** → solved structurally: the chair never sees raw
+  candidates, only the blind verifier's confirmed output (decision 3).
+  Residual risk shifts to verifier leniency — watched via the Panel
+  section's confirm rates; the verifier's `sonnet` pin is the tuning knob.
 - **External CLI flakiness** (auth expiry, rate limits, outages) → soft
-  timeout per lane, skip with disclosure, never block the round.
-- **Data egress** → explicit per-repo consent at the gate; local lane as
-  the private-repo path; agentic lanes run read-only sandboxes.
+  timeout per lane, skip with disclosure, never block the round;
+  API-key auth recommended over OAuth for headless reliability.
+- **Data egress** → explicit per-repo consent at the gate naming each
+  lane's training posture; local lane as the private-repo path; agentic
+  lanes run read-only sandboxes.
 - **Local model quality** → diff-only scope keeps it honest (nothing to
   hallucinate repo-wide), precision tracking decides whether it stays.
-- **Cost drift** → seed-only default; external spend disclosed in the
-  report; the panel adds chair verification tokens, measurable via the
-  existing usage feed from run one.
+- **Cost drift** → seed+final default; external spend disclosed in the
+  report; verifier + chair tokens measurable via the existing usage feed
+  from run one.
 
 ## Phasing
 
 1. **MVP**: `panel_review.sh` + prompt template + candidates schema +
-   chair-brief addition + `source` field + Panel report section.
-   Seed-round only, diff-only mode for all three lanes (uniform, simplest
-   to ship and measure).
+   `panel-verifier` agent (sonnet pin) + chair-brief addition + `source`
+   field + Panel report section + setup-gate auth probes. Seed+final
+   rounds, diff-only mode for all three lanes (uniform, simplest to ship
+   and measure).
 2. **Agentic lanes**: read-only repo exploration for codex/gemini;
    compare precision against their diff-only baselines from phase 1.
 3. **Tuning**: `rounds: all` support, per-lane auto-disable on measured
-   low precision, cross-family agreement promoting finding confidence,
-   and evaluating a panel seat for the qa-loop's fix-reviewer.
+   low precision, and cross-family agreement promoting finding
+   confidence.
 
-## Open questions for the maintainer
+## Resolved questions (2026-09-09)
 
-1. Seed-only default, or seed+final? (Final-round panel catches
-   fix-introduced regressions the chair family might share with the
-   implementer — the strongest argument for `seed+final`.)
-2. Should candidate *rejections* be recorded in the ledger (as wontfix
-   rows with source) or only counted in the Panel section? Leaning:
-   counts only — rejected candidates never earned an ID.
-3. Chair-verifies vs. separate blind verifier in v1? Leaning: chair, for
-   cost; revisit if the Panel section shows suspiciously high confirm
-   rates.
-4. Is qa-loop in scope at all for v1? Leaning: no — simulator evidence
-   doesn't travel to external CLIs; review-loop's diff-shaped input is
-   the natural fit.
+Originally open, now decided — kept for the record:
+
+1. Seed-only vs. seed+final → **seed+final**.
+2. Record candidate rejections in the ledger vs. counts only → **counts
+   only**.
+3. Chair-verifies vs. separate blind verifier in v1 → **separate blind
+   verifier**.
+4. qa-loop in scope → **no; review-loop only**.

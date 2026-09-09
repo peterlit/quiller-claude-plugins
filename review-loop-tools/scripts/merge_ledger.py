@@ -12,6 +12,7 @@ Usage:
   merge_ledger.py add-usage <ledger.json> <round> <role> <tokens>   (accumulates)
   merge_ledger.py diff <loop-dir> <round> <range>
   merge_ledger.py next-round <loop-dir> <round> [--fragment F] [--sha S] [--pass full|targeted] [--phase-next NAME] [--brief-severity major|minor]
+  merge_ledger.py panel-tally <ledger.json> <round> <verified.json>
 
 Merge mode: the fragment is {"findings": [...]}. Existing findings are
 updated (scalar fields overwritten, evidence lists unioned, status_history
@@ -442,7 +443,7 @@ def archive(args):
     # into legacy/ — every loop run pays to `ls` whatever is left here.
     KEEP = {"WORKFLOWS.md", "TESTCASES.md", "HARNESS_NOTES.md", "BACKLOG.md",
             ".gitignore", "archive", "evidence", "tools", "driver", "scratch",
-            "notes"}
+            "notes", "panel.json"}   # panel config + consent survive across loops
     for entry in sorted(os.listdir(loop_dir)):
         src = os.path.join(loop_dir, entry)
         if entry in KEEP or not os.path.isfile(src):
@@ -455,6 +456,36 @@ def archive(args):
               file=sys.stderr)
         sys.exit(1)
     print(json.dumps({"archived_to": dest, "moved": moved}))
+
+def panel_tally(args):
+    """Record a panel round's per-lane tallies (filed/confirmed/demoted/
+    rejected) from the verifier's verified.json into ledger["panel"], so the
+    report's Panel section renders from committed state — the verified file
+    itself is fragment scratch and stays out of git. Counts only: rejected
+    candidates never earn an ID or details, by design."""
+    if len(args) < 3:
+        print("usage: merge_ledger.py panel-tally <ledger.json> <round> <verified.json>",
+              file=sys.stderr)
+        sys.exit(2)
+    path, rnd, vpath = args[0], args[1], args[2]
+    # rnd is a round number OR the label "final" (the post-stop panel pass).
+    key = str(int(rnd)) if str(rnd).isdigit() else str(rnd)
+    with open(vpath) as fh:
+        verified = json.load(fh)
+    tallies = verified.get("lane_tallies")
+    if not isinstance(tallies, dict) or not tallies:
+        print(f"merge_ledger: {vpath} has no lane_tallies", file=sys.stderr)
+        sys.exit(1)
+    with open(path) as fh:
+        ledger = json.load(fh)
+    ledger.setdefault("panel", {})[key] = tallies
+    with open(path, "w") as fh:
+        json.dump(ledger, fh, indent=2)
+        fh.write("\n")
+    print(json.dumps({"round": key, "lanes": {
+        k: {"filed": v.get("filed", 0),
+            "kept": v.get("confirmed", 0) + v.get("demoted", 0)}
+        for k, v in tallies.items()}}))
 
 def consulted(args):
     """Record that the human approved a thrashing_soft continuation at round
@@ -481,7 +512,7 @@ def main():
              "open": open_findings, "archive": archive, "scope": set_scope,
              "set-usage": set_usage, "add-usage": add_usage,
              "diff": write_diff, "next-round": next_round,
-             "notes-rotate": notes_rotate}
+             "notes-rotate": notes_rotate, "panel-tally": panel_tally}
     if len(sys.argv) >= 2 and sys.argv[1] in verbs:
         verbs[sys.argv[1]](sys.argv[2:])
         return

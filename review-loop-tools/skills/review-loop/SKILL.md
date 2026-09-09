@@ -85,7 +85,7 @@ You orchestrate an iterative review loop between the `implementer` and
    pre-existing `.gitignore` is the host's — leave it and suggest the
    upgrade in one line:
    ```
-   # Conclusions in git; evidence and scratch on disk. Managed by review-loop-tools v0.10.0.
+   # Conclusions in git; evidence and scratch on disk. Managed by review-loop-tools v0.11.0.
    *
    !*/
    !.gitignore
@@ -93,6 +93,7 @@ You orchestrate an iterative review loop between the `implementer` and
    !ledger.json
    !rounds.md
    !verdict.json
+   !panel.json
    ```
    Conclusions are re-included by exact name at ANY depth — so
    `archive/<name>/ledger.json` stays tracked while archived `fragments/`,
@@ -103,6 +104,23 @@ You orchestrate an iterative review loop between the `implementer` and
    claiming otherwise — and at the end, append one line to the repo-root
    BACKLOG.md naming the archive path: in an ignored tree the archive is the
    only copy, and BACKLOG.md is what survives.
+2b. PANEL (optional — multi-provider reviewers; skip this step entirely if
+   the user didn't ask for a panel and no `.review-loop/panel.json` exists).
+   External models (codex CLI, gemini CLI, a local ollama model) file
+   candidate findings on the diff; the `panel-verifier` agent adjudicates
+   them blind; only verified findings reach the chair. To offer it:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py probe --smoke`
+   and present the available lanes. Before enabling codex/gemini lanes,
+   state PLAINLY: they send the diff to OpenAI/Google, and the probe's auth
+   line says whether the configured tier may train on inputs (Gemini
+   free-tier OAuth does — recommend API keys for both). Record the answer:
+   write `panel.json` with `lanes` (name, type, model, timeout_s,
+   max_diff_tokens), `rounds: "seed+final"`, and
+   `consent: {remote_lanes_approved: <bool>, approved_by, date}` — the
+   script refuses remote lanes without it. API keys live in the environment
+   (`OPENAI_API_KEY`, `GEMINI_API_KEY`), NEVER in panel.json. A private
+   repo gets the local lane only. panel.json survives archive — consent is
+   per-repo, asked once.
 3. Seed findings — merged as ROUND 0, because the seed precedes round 1: a
    seed merged as round 1 poisons the net metric (N new, 0 closed) and makes
    a converging run look like thrashing. Three seed modes, in priority order:
@@ -128,6 +146,22 @@ You orchestrate an iterative review loop between the `implementer` and
    write its LEDGER to `.review-loop/fragments/seed.json` and to OMIT
    first_seen_round and status_history (the merge stamps them), then:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .review-loop/ledger.json .review-loop/fragments/seed.json 0`
+   PANEL SEED PASS (only in SCOPE mode with panel lanes configured — cold
+   reviews have no diff for diff-only lanes; they get the final pass only):
+   BEFORE dispatching the seed reviewer, materialize the scope diff
+   (`merge_ledger.py diff .review-loop 0 <range>`) and run the lanes in the
+   background with phase `seed-review:waiting:panel`:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py run .review-loop 0`
+   When it returns (lanes that time out or error are skipped — never wait
+   past their summary), dispatch `panel-verifier` with the candidate file
+   paths, the stat/diff paths, and output
+   `.review-loop/fragments/round-0-panel.verified.json`; then record
+   `merge_ledger.py panel-tally .review-loop/ledger.json 0 <verified.json>`.
+   The seed reviewer's dispatch then ALSO names the verified file: "panel
+   findings, already code-verified — fold into your LEDGER with their
+   source/sources fields kept, dedupe against your own findings, do not
+   re-litigate." The chair mints their IDs like any finding. Never hand the
+   chair raw candidate files.
 
 ## Each round (N = 1 .. max_rounds) — three plumbing turns, not seven
 Each orchestrator turn re-reads the whole session context (~25K effective
@@ -170,8 +204,31 @@ one closeout pass), and sets the phase marker.
    instead of re-asking an answered question.
    Running UNATTENDED, don't wait on an answer that cannot come — take the
    default: abort with the report, then run CLOSEOUT. Anything else -> run
-   CLOSEOUT if eligible, write the final report, then set
-   `.review-loop/.phase` to "done".
+   the PANEL FINAL PASS if configured, then CLOSEOUT if eligible, write the
+   final report, then set `.review-loop/.phase` to "done".
+
+## Panel final pass (only when panel.json has lanes; runs after ANY stop)
+The cross-family look at the ACCUMULATED change — the pass that exists to
+catch fix-introduced regressions the chair's family may share with the
+implementer. Range: `<scope start>..HEAD` when a scope is set, else
+`<round-1 start sha>..HEAD`.
+1. `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py diff .review-loop final <range>`
+   then, with phase `…:waiting:panel-final`:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py run .review-loop final`
+2. Dispatch `panel-verifier` on the candidates (output
+   `.review-loop/fragments/round-final-panel.verified.json`), then
+   `merge_ledger.py panel-tally .review-loop/ledger.json final <verified.json>`.
+3. Verified findings ride into the CLOSEOUT reviewer's dispatch ("fold in,
+   source fields kept") — the chair still owns the ledger. If closeout has
+   nothing else eligible but the panel confirmed findings, that fold-in is
+   itself worth the one closeout reviewer dispatch (no implementer, no
+   iteration): merge its fragment `--no-escalate` and the findings land in
+   the report/BACKLOG per the normal rules. Zero verified findings -> just
+   the tally; note "panel: nothing beyond the chair" in the report's WATCH
+   LIST line.
+Lane failures are soft everywhere: skipped lanes are disclosed in the
+report (the tally row simply won't exist), never retried past their
+timeout, and never block the stop, the closeout, or the report.
 
 ## Closeout (one mop-up cycle after any stop; skip if nothing is eligible)
 Closeout fixes are the SMALLEST CORRECT change. If the right fix is
@@ -297,6 +354,9 @@ merge_ledger.py's verbs:
   simulator loops — the ratio grows with turns per dispatch; budget on the reported scale.
   next-round takes repeatable `--usage role=tokens` (replace semantics) so no separate calls are needed.
 - next-round:`merge_ledger.py next-round <loop-dir> <N> [--fragment F]` (merge + metrics + advance, one turn)
+- panel-tally:`merge_ledger.py panel-tally <ledger> <N|final> <verified.json>` (per-lane
+  filed/confirmed/demoted/rejected counts into ledger["panel"] — the report's Panel
+  section renders from it; the verified file itself is scratch)
 The CHANGES block carries `verify_cmd` (scoped tests the reviewer reruns).
 Hooks active during a loop: `read_guard` denies whole-file dumps,
 unfiltered test runs, and whole-diff re-pulls (with the fix in the message);
@@ -310,4 +370,10 @@ Other scripts: `render_report.py <loop-dir>` (the report), `hotspots.py`
 (cold-review map), `mutate.py <manifest>` (re-run an implementer's mutation
 claims in an isolated worktree), `hygiene_check.sh <loop-dir>` (advisory
 git-hygiene report: tracked scratch, Finder-duplicate names, oversized
-tracked files, denylist-style ignores — run at Setup and before the report).
+tracked files, denylist-style ignores — run at Setup and before the report),
+`panel_review.py probe|run` (multi-provider panel lanes: probe auth at the
+gate, run lanes against a materialized diff; external models are FINDERS
+only — the `panel-verifier` agent, pinned `sonnet`, adjudicates their
+candidates blind, and only the chair writes ledger fragments. All three
+pins — chair `opus`, verifier `sonnet`, implementer `inherit` — must stay
+distinct from each other and from the session model).

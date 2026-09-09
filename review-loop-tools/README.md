@@ -68,6 +68,26 @@ on different models, a partial guard against correlated blind spots.
 to, implementer/reviewer model diversity silently collapses — edit the reviewer's
 `model:` pin (in `agents/skeptical-reviewer.md`) to restore it.*
 
+## Multi-provider review panel (0.11.0, optional)
+
+Model pins decorrelate within one model family; the panel decorrelates
+across families. When enabled, external models — OpenAI's codex CLI,
+Google's gemini CLI, and/or a locally running ollama model — review the
+diff as additional skeptics. They are **finders only**: each files at most
+10 candidate findings (no IDs, no ledger access), a blind `panel-verifier`
+agent (pinned to a third model) checks every candidate against the actual
+code, and only verified findings reach the chair reviewer, tagged
+`via panel:<lane>`. The panel runs on the seed diff and once more after the
+loop stops (`seed+final`), so metrics and convergence are untouched.
+
+Remote lanes require recorded consent in `.review-loop/panel.json` (the
+diff leaves your machine; prefer API-key auth — Gemini's free OAuth tier
+may train on inputs). The local ollama lane sends nothing anywhere, which
+is its entire point. The report's Panel section shows per-lane
+filed/confirmed/rejected counts — measured precision, the signal for
+dropping a lane that isn't earning its keep. Lane failures are always
+soft: skipped with a note, never blocking a round.
+
 ## Every knob in one place
 
 [CONTROLS.md](CONTROLS.md) ships with the plugin: all settings, file-based
