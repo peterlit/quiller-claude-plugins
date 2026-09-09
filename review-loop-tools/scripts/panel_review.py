@@ -204,9 +204,16 @@ def run_gemini(lane, prompt, repo, timeout):
     return r.stdout, r
 
 def run_ollama(lane, prompt, repo, timeout):
+    # num_ctx must cover the whole prompt: ollama's default context is far
+    # below our diff cap and would silently drop the prompt's head — the
+    # exact silent-cap failure the panel design forbids. Size it from the
+    # actual prompt plus headroom for the response.
+    num_ctx = min(int(len(prompt) / CHARS_PER_TOKEN * 1.25) + 4096,
+                  int(lane.get("num_ctx_max", 65536)))
     body = json.dumps({"model": lane.get("model", "qwen3-coder:30b"),
                        "prompt": prompt, "stream": False,
-                       "format": "json"}).encode()
+                       "format": "json",
+                       "options": {"num_ctx": num_ctx}}).encode()
     req = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
