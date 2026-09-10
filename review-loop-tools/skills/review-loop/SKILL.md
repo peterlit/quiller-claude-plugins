@@ -113,14 +113,22 @@ You orchestrate an iterative review loop between the `implementer` and
    and present the available lanes. Before enabling codex/gemini lanes,
    state PLAINLY: they send the diff to OpenAI/Google, and the probe's auth
    line says whether the configured tier may train on inputs (Gemini
-   free-tier OAuth does — recommend API keys for both). Record the answer:
-   write `panel.json` with `lanes` (name, type, model, timeout_s,
-   max_diff_tokens), `rounds: "seed+final"`, and
-   `consent: {remote_lanes_approved: <bool>, approved_by, date}` — the
-   script refuses remote lanes without it. API keys live in the environment
+   free-tier OAuth does — recommend API keys for both). Record the answer
+   in TWO files: `panel.json` with `lanes` (name, type, model, timeout_s,
+   max_diff_tokens; types codex/gemini/ollama/cmd — a `cmd` lane runs an
+   arbitrary command that reads the prompt on stdin) and
+   `rounds: "seed+final"`; and the consent in
+   `.review-loop/panel-consent.json` as `{remote_lanes_approved: <bool>,
+   cmd_lanes_approved: <bool>, approved_by, date}` — the script refuses
+   remote and cmd lanes without it. panel-consent.json is deliberately
+   ABSENT from the gitignore allowlist and never committed: consent is
+   per-checkout, given by the human at the keyboard — a consent that
+   traveled in git would authorize egress and shell execution on other
+   developers' machines. API keys live in the environment
    (`OPENAI_API_KEY`, `GEMINI_API_KEY`), NEVER in panel.json. A private
-   repo gets the local lane only. panel.json survives archive — consent is
-   per-repo, asked once.
+   repo gets the local lane only (loopback OLLAMA_HOST — the script treats
+   a remote OLLAMA_HOST as a remote lane). Both files survive archive:
+   lanes are shared config; consent is asked once per checkout.
 3. Seed findings — merged as ROUND 0, because the seed precedes round 1: a
    seed merged as round 1 poisons the net metric (N new, 0 closed) and makes
    a converging run look like thrashing. Three seed modes, in priority order:
@@ -155,7 +163,7 @@ You orchestrate an iterative review loop between the `implementer` and
    When it returns (lanes that time out or error are skipped — never wait
    past their summary), dispatch `panel-verifier` with the candidate file
    paths, the stat/diff paths, and output
-   `.review-loop/fragments/round-0-panel.verified.json`; then record
+   `.review-loop/fragments/panel/round-0-panel.verified.json`; then record
    `merge_ledger.py panel-tally .review-loop/ledger.json 0 <verified.json>`.
    The seed reviewer's dispatch then ALSO names the verified file: "panel
    findings, already code-verified — fold into your LEDGER with their
@@ -216,7 +224,7 @@ implementer. Range: `<scope start>..HEAD` when a scope is set, else
    then, with phase `…:waiting:panel-final`:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py run .review-loop final`
 2. Dispatch `panel-verifier` on the candidates (output
-   `.review-loop/fragments/round-final-panel.verified.json`), then
+   `.review-loop/fragments/panel/round-final-panel.verified.json`), then
    `merge_ledger.py panel-tally .review-loop/ledger.json final <verified.json>`.
 3. Verified findings ride into the CLOSEOUT reviewer's dispatch ("fold in,
    source fields kept") — the chair still owns the ledger. If closeout has

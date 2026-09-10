@@ -443,7 +443,8 @@ def archive(args):
     # into legacy/ — every loop run pays to `ls` whatever is left here.
     KEEP = {"WORKFLOWS.md", "TESTCASES.md", "HARNESS_NOTES.md", "BACKLOG.md",
             ".gitignore", "archive", "evidence", "tools", "driver", "scratch",
-            "notes", "panel.json"}   # panel config + consent survive across loops
+            "notes", "panel.json",   # panel lane config survives across loops
+            "panel-consent.json"}    # per-checkout consent (untracked) survives too
     for entry in sorted(os.listdir(loop_dir)):
         src = os.path.join(loop_dir, entry)
         if entry in KEEP or not os.path.isfile(src):
@@ -472,9 +473,19 @@ def panel_tally(args):
     key = str(int(rnd)) if str(rnd).isdigit() else str(rnd)
     with open(vpath) as fh:
         verified = json.load(fh)
-    tallies = verified.get("lane_tallies")
-    if not isinstance(tallies, dict) or not tallies:
-        print(f"merge_ledger: {vpath} has no lane_tallies", file=sys.stderr)
+    tallies = verified.get("lane_tallies") if isinstance(verified, dict) else None
+    # Validate the SHAPE before touching the ledger: this file is written by
+    # an LLM verifier, and a malformed row ({"ollama": 10}) persisted here
+    # breaks render_report on every subsequent run — the ledger is the one
+    # file this design commits to git, so never write first and die after.
+    if (not isinstance(tallies, dict) or not tallies
+            or any(not isinstance(v, dict)
+                   or any(not isinstance(n, int) or isinstance(n, bool)
+                          for n in v.values())
+                   for v in tallies.values())):
+        print(f"merge_ledger: {vpath} lane_tallies must be a non-empty map of "
+              "lane -> {filed/confirmed/demoted/rejected: int}; nothing written",
+              file=sys.stderr)
         sys.exit(1)
     with open(path) as fh:
         ledger = json.load(fh)

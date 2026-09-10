@@ -109,8 +109,12 @@ def main():
         L.append("|---|---|---:|---:|---:|---:|---:|")
         # Numeric rounds in order; labels ("final") after them.
         for rk in sorted(panel, key=lambda k: (0, int(k)) if k.isdigit() else (1, 0)):
+            if not isinstance(panel[rk], dict):
+                continue   # a malformed row must not kill the whole report
             for lane in sorted(panel[rk]):
                 t = panel[rk][lane]
+                if not isinstance(t, dict):
+                    continue
                 filed = t.get("filed", 0)
                 kept = t.get("confirmed", 0) + t.get("demoted", 0)
                 rate = f"{kept}/{filed}" if filed else "—"

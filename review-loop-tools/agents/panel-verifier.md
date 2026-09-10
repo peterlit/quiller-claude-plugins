@@ -18,9 +18,9 @@ inherits — the same diversity rule as every other pin. If the user runs their
 session on this pin's model, change this pin.)
 
 Your dispatch names: the candidate file paths
-(`fragments/round-<N>-<lane>.candidates.json`), the round's
+(`fragments/panel/round-<N>-<lane>.candidates.json`), the round's
 `briefs/round-<N>.stat` and `.diff` paths, the repo root, and your output
-path (`fragments/round-<N>-panel.verified.json`).
+path (`fragments/panel/round-<N>-panel.verified.json`).
 
 For EACH candidate, read the current code at its evidence locations and
 decide:

@@ -218,7 +218,9 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
 
 ## Review panel (multi-provider)
 
-*Surface: `.review-loop/panel.json`, offered at Setup when the CLIs exist.*
+*Surface: `.review-loop/panel.json` (lanes, tracked) +
+`.review-loop/panel-consent.json` (consent, untracked), offered at Setup
+when the CLIs exist.*
 
 - **What it is** `[review]` — external models (OpenAI's codex CLI, Google's
   gemini CLI, a local ollama model) review the diff as extra skeptics. They
@@ -230,11 +232,15 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   probes which lanes are installed and authenticated
   (`panel_review.py probe --smoke`) and asks for consent.
 - **Consent and privacy** `[review]` — codex/gemini lanes send the diff off
-  the machine; `panel.json` records `consent.remote_lanes_approved` per
-  repo and the script refuses remote lanes without it. Gemini's free OAuth
-  tier may train on inputs — use API keys (`OPENAI_API_KEY`,
-  `GEMINI_API_KEY`, environment only, never in panel.json). Private repo →
-  local lane only (ollama, nothing leaves the machine, no account).
+  the machine; the untracked per-checkout `.review-loop/panel-consent.json`
+  records `remote_lanes_approved` (and `cmd_lanes_approved` for `cmd`
+  lanes, which execute a command from git-tracked panel.json) and the
+  script refuses those lanes without it — consent never travels in git.
+  Gemini's free OAuth tier may train on inputs — use API keys
+  (`OPENAI_API_KEY`, `GEMINI_API_KEY`, environment only, never in
+  panel.json). Private repo → local lane only (ollama on a loopback
+  `OLLAMA_HOST`, nothing leaves the machine, no account; a non-loopback
+  `OLLAMA_HOST` is treated as a remote lane).
 - **Flood control and measurement** `[review]` — each lane files at most 10
   candidates by confidence; the report's Panel section shows per-lane
   filed/confirmed/demoted/rejected, and that kept-rate is the drop-or-keep
