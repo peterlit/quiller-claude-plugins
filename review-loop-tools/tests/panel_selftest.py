@@ -9,9 +9,11 @@ command string, the enabled flag, the fragments/panel/ namespace,
 string-aware extract_json, the oversized-backtick fence, the loud num_ctx
 clamp, smoke_lane threading the configured model, consent embedded in the
 git-tracked panel.json being IGNORED, bare `probe --smoke` reading
-.review-loop/panel.json from the cwd, panel-tally shape AND
-JSON-parse validation, render_report tolerance of a poisoned panel row,
-and the subagent guard's flat-vs-panel-subdir behavior.
+.review-loop/panel.json from the cwd, probe surviving a MALFORMED
+panel.json with an "unreadable" row instead of a traceback, panel-tally
+shape AND JSON-parse validation, render_report tolerance of a poisoned
+panel row, the subagent guard's flat-vs-panel-subdir behavior, and the
+three CONTROLS.md copies staying byte-identical (HANDOFF.md cp-sync).
 """
 import contextlib, hashlib, io, json, os, re, shutil, subprocess, sys, tempfile
 
@@ -203,6 +205,27 @@ def main():
            "bare probe --smoke picks up .review-loop/panel.json from cwd "
            "and threads the configured model into the smoke")
 
+        # --- probe survives a malformed panel.json (no traceback) ---
+        broot = os.path.join(td, "probe-bad")
+        os.makedirs(os.path.join(broot, ".review-loop"))
+        with open(os.path.join(broot, ".review-loop", "panel.json"), "w") as fh:
+            fh.write('{"lanes": [ broken')
+        cwd, buf = os.getcwd(), io.StringIO()
+        real_which = pr.shutil.which
+        real_open = pr.urllib.request.urlopen
+        try:
+            pr.shutil.which = lambda n: None
+            pr.urllib.request.urlopen = _no_daemon
+            os.chdir(broot)
+            with contextlib.redirect_stdout(buf):
+                pr.probe([])
+        finally:
+            os.chdir(cwd)
+            pr.shutil.which, pr.urllib.request.urlopen = real_which, real_open
+        probe_out = json.loads(buf.getvalue())
+        ok(probe_out.get("panel", "").startswith("unreadable"),
+           "probe reports malformed panel.json instead of crashing")
+
         # --- panel-tally validates shape BEFORE writing ---
         ml = os.path.join(SCRIPTS, "merge_ledger.py")
         ledger = os.path.join(td, "ledger.json")
@@ -261,6 +284,15 @@ def main():
         r = sh(["bash", g, gl], input="{}")
         ok(r.returncode == 2,
            "guard polices flat *.candidates.json again (exemption removed)")
+
+        # --- CONTROLS.md mirrors stay byte-identical (HANDOFF.md cp-sync) ---
+        repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+        digests = {p: hashlib.md5(open(os.path.join(repo, p), "rb").read())
+                   .hexdigest()
+                   for p in ("CONTROLS.md", "qa-loop-tools/CONTROLS.md",
+                             "review-loop-tools/CONTROLS.md")}
+        ok(len(set(digests.values())) == 1,
+           "CONTROLS.md mirrors byte-identical: " + json.dumps(digests))
 
         print(f"\nALL {PASS} CHECKS PASSED")
     finally:

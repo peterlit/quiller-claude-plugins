@@ -137,9 +137,15 @@ def probe(args):
     # `probe --smoke`, and a probe that silently ignored the configured
     # panel would smoke the CLIs' DEFAULT models — a model the account
     # cannot access would gate green and then fail every round.
-    panel = load_json(args[0] if args
-                      else os.path.join(".review-loop", "panel.json"))
+    panel_path = args[0] if args else os.path.join(".review-loop", "panel.json")
     out = {}
+    try:
+        panel = load_json(panel_path)
+    except (ValueError, OSError) as e:
+        # A hand-edited panel.json with a typo must not turn the setup gate
+        # into a traceback: report it and probe lane availability anyway.
+        panel = None
+        out["panel"] = "unreadable ({}): {}".format(panel_path, e)
 
     codex = shutil.which("codex")
     if not codex:
