@@ -393,11 +393,15 @@
         {
           "round": 3,
           "status": "open"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
         }
       ],
-      "current_status": "open",
+      "current_status": "fixed",
       "rejections": [],
-      "note": "CONFIRMED by execution: in a scratch dir containing .review-loop/panel.json = '{\"lanes\": [ broken', `python3 panel_review.py probe` exits nonzero with a full JSONDecodeError traceback (main() at :428-433 has no try). load_json (:64-68) only guards nonexistence, not malformed content. Fix: try/except around the default-path load, emit {\"panel\": \"unreadable: <err>\"} into the probe output and continue with panel=None."
+      "note": "CONFIRMED by execution: in a scratch dir containing .review-loop/panel.json = '{\"lanes\": [ broken', `python3 panel_review.py probe` exits nonzero with a full JSONDecodeError traceback (main() at :428-433 has no try). load_json (:64-68) only guards nonexistence, not malformed content. Fix: try/except around the default-path load, emit {\"panel\": \"unreadable: <err>\"} into the probe output and continue with panel=None. | RESOLVED (round 2): fixed post-loop in 5703e86: probe guards the default-path load, emits an 'unreadable' panel row, selftest check added (38 total)"
     },
     {
       "id": "tests/CONTROLS.md:mirror-sync-unenforced",
@@ -416,11 +420,15 @@
         {
           "round": 3,
           "status": "open"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
         }
       ],
-      "current_status": "open",
+      "current_status": "fixed",
       "rejections": [],
-      "note": "CONFIRMED: grep for 'CONTROLS.md' across all *.py and *.sh in the repo matches only nothing outside the docs themselves (commit_guard.sh does not check it), and `find -name CONTROLS.md` returns exactly the three copies. BACKLOG fix is three lines: assert md5(root) == md5(qa) == md5(review) in panel_selftest.py (or in commit_guard.sh, which already runs pre-commit)."
+      "note": "CONFIRMED: grep for 'CONTROLS.md' across all *.py and *.sh in the repo matches only nothing outside the docs themselves (commit_guard.sh does not check it), and `find -name CONTROLS.md` returns exactly the three copies. BACKLOG fix is three lines: assert md5(root) == md5(qa) == md5(review) in panel_selftest.py (or in commit_guard.sh, which already runs pre-commit). | RESOLVED (round 2): fixed post-loop in 5703e86: panel_selftest.py asserts md5 equality of all three CONTROLS.md copies"
     }
   ],
   "scope": "pre-multi-provider-panel..HEAD",
