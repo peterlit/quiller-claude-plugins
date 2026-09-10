@@ -1,0 +1,464 @@
+{
+  "round": 2,
+  "round_start_sha": "f6a99362b2004d1f93f420f42534c784d8620457",
+  "max_rounds": 2,
+  "token_budget": null,
+  "findings": [
+    {
+      "id": "correctness/panel_review.py:lane-exception-aborts-panel",
+      "claim": "run_lane catches only TimeoutExpired/URLError/OSError, but the runners raise other exception types on ordinary misconfiguration and bad responses: run_cmd does lane[\"cmd\"] (KeyError if a cmd lane omits the key) and run_ollama does json.load(resp) (json.JSONDecodeError -- a ValueError, not an OSError -- if anything but JSON comes back from OLLAMA_URL, e.g. a proxy HTML page or a different service on 11434). The exception propagates out of ex.map, so ONE bad lane kills the whole panel run with a traceback, prints no JSON on stdout, and throws away the other lanes' already-completed candidates -- flatly contradicting the module docstring's 'A lane that times out, errors, or lacks consent is SKIPPED with a note -- the panel never blocks a round.' Verified by execution: a two-lane panel.json (lane a missing cmd, lane b returning valid candidates) exited with KeyError at panel_review.py:226 and produced zero output; lane b's result was lost.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:233-294",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "note": "Verified: run_lane wraps the runner in `except Exception` (panel_review.py:315-319) and run() maps through safe() (panel_review.py:349-354). Selftest reproduces the missing-cmd KeyError as a soft per-lane error while the sibling lane still files.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "correctness/merge_ledger.py:panel-tally-poisons-ledger",
+      "claim": "panel_tally validates only that lane_tallies is a non-empty dict, never that each lane's VALUE is a dict, and it writes the ledger BEFORE the summary print. Feed it the kind of malformed JSON an LLM verifier actually produces ({\"lane_tallies\": {\"ollama\": 10}}) and it persists ledger[\"panel\"][\"0\"] = {\"ollama\": 10}, then dies with AttributeError at merge_ledger.py:486 -- and from then on render_report.py:114 raises AttributeError on EVERY run, so the loop can never produce its final report, and the corrupt state is in ledger.json, which is the one file this design commits to git.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/merge_ledger.py:460-488",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "note": "Verified by running: `{\"lane_tallies\": {\"ollama\": 10}}` exits 1 and leaves ledger.json byte-identical (merge_ledger.py:476-489, validation precedes both open()s). render_report.py:112-118 additionally skips non-dict rows and non-dict lanes.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "security/panel_review.py:prompt-fence-collision",
+      "claim": "build_prompt wraps the raw diff in a ```diff fence, so any diff that touches a markdown file closes the fence early and the remainder of the diff lands in the prompt as top-level text the model reads as instructions. This is not hypothetical: THIS round's own diff contains four such lines (round-0.diff:530,549,1164,1176), and the first one drops the panel-reviewer template's own instruction block ('Respond with ONLY this JSON object') plus a fake findings schema into the prompt at top level. Failure mode: degraded/echoed candidates that burn the lane's budget, and a prompt-injection channel where anyone who can add markdown to a diff can steer the panel reviewers.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:116-134",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "note": "Verified: fenced() (panel_review.py:147-154) sizes the fence to max(4, longest backtick run + 1) over the whole payload and is applied to BOTH stat and diff; the diff block is prefixed with an explicit UNTRUSTED DATA instruction. Round-0's own markdown-fence diff no longer escapes.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "security/panel_review.py:consent-gate-by-lane-type",
+      "claim": "The remote-lane consent gate keys on the lane TYPE (`kind in (\"codex\",\"gemini\")`), not on whether the diff leaves the machine. Two of the four runners escape it: a `cmd` lane can shell out to any remote CLI, and the 'local' ollama lane talks to OLLAMA_URL, which is read straight from the OLLAMA_HOST environment variable -- a standard ollama setup for a shared GPU box. With OLLAMA_HOST=http://gpu.corp:11434 the whole private diff goes over the network while README.md:85 promises 'The local ollama lane sends nothing anywhere, which is its entire point' and CONTROLS.md:237 says 'nothing leaves the machine'. probe() makes this invisible: it prints the endpoint URL only in the FAILURE hint, so a working remote endpoint is reported as {\"installed\": true, \"auth\": \"none-needed\"} with no address at the consent gate.",
+      "evidence": {},
+      "severity": "major",
+      "region": "panel_review.py:55-57,296-301",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "note": "VERIFIED FIXED. is_loopback() now exact-matches 'localhost' or ipaddress.ip_address(host).is_loopback (panel_review.py:65-77); normalize_url() defaults a missing scheme (47-53). Ran the classifier over 22 hosts: 127.0.0.1.evil.com / 127.0.0.1.nip.io / 0177.0.0.1 / 2130706433 / 127.0.0.1@evil.com -> remote (gated); 127.0.0.1:11434, localhost:11434, [::1], 127.5.4.3, ::ffff:127.0.0.1, LOCALHOST -> local. Ambiguous forms ('::1' unbracketed, '127.1', OLLAMA_HOST='') fail CLOSED (gated as remote), which is the safe direction. probe() still names the endpoint unconditionally (169).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "partial"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "security/panel_review.py:cmd-lane-shell-from-tracked-config",
+      "claim": "run_cmd executes lane[\"cmd\"] with shell=True, and the new SKILL.md gitignore recipe explicitly TRACKS .review-loop/panel.json in git (`!panel.json`) while archive()'s KEEP set makes it survive every loop. So a panel.json that arrives with a clone, a branch, or a PR silently gets arbitrary shell executed on the reviewer's machine, unattended, the moment the orchestrator runs the panel step -- with the working directory set to the repo root and no gate, no allowlist and no disclosure anywhere in the setup prompt (SKILL.md:117 lists the lane schema as name/type/model/timeout_s/max_diff_tokens and never mentions the cmd type at all).",
+      "evidence": {},
+      "severity": "major",
+      "region": "panel_review.py:270-274,302-305",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "note": "VERIFIED FIXED. cmd_approved() (panel_review.py:85-96) requires cmd_lanes_approved to be a LIST containing the exact command string or its sha256; boolean/str/missing all return False (checked live). run_cmd executes lane['cmd'] (320) \u2014 the exact string that was hashed, no substitution in between \u2014 so a pulled panel.json that edits the command fails the gate. Lane with no cmd key is skipped, not KeyError. Legacy boolean consent breaks toward SKIP, the safe direction. Residual indirection filed separately as security/panel_review.py:cmd-consent-hash-covers-invocation-not-script.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "partial"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "security/SKILL.md:panel-consent-travels-in-git",
+      "claim": "Remote-lane consent is stored as `consent.remote_lanes_approved: true` in panel.json, which the same change makes git-tracked and archive-persistent, and SKILL.md:122 states consent is 'per-repo, asked once'. Consequence: developer A's one-time approval is committed and then authorizes shipping developer B's private diffs to OpenAI/Google on B's machine, with no re-prompt, no record of who is running, and no expiry -- consent for a data-egress decision is being made by a file in the repo rather than by the human at the keyboard.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/skills/review-loop/SKILL.md:104-123",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "note": "Verified by running a scratch loop-dir whose panel.json contained consent:{remote_lanes_approved:true, cmd_lanes_approved:true}: both lanes were still skipped. load_consent() reads only <loop-dir>/panel-consent.json (panel_review.py:59-66); the SKILL.md gitignore allowlist (SKILL.md:88-97) lists !panel.json and NOT panel-consent.json, so `*` ignores it; merge_ledger KEEP retains it across archive.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "correctness/panel_review.py:extract-json-brace-scanner",
+      "claim": "extract_json finds the JSON object by counting raw { and } characters with no string-awareness, so an UNBALANCED brace inside any claim or evidence string (a code reviewer writing 'the closing } is missing' or quoting 'if (x) {') breaks the depth count and returns None even though the model emitted perfectly valid JSON. run_lane then reports the lane as 'no parseable candidates JSON' and the entire lane's cross-family signal -- the only reason the feature exists -- is discarded for that round.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:136-155",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "note": "Verified: raw_decode-based scan (panel_review.py:177-197) parses a payload whose claim string contains 'quoting if (x) { here'; sanitize() still rejects non-dict/non-list shapes, so a junk first object cannot poison the lane.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "minor/merge_ledger.py:panel-tally-unguarded-json-load",
+      "claim": "merge_ledger.py's panel-tally command loads the panel-verifier's verified.json with a bare `json.load(fh)` and no exception handling; a malformed verified.json (e.g. the panel-verifier agent produced truncated or invalid JSON) crashes the merge step with an uncaught traceback instead of a clean, actionable error.",
+      "evidence": {},
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/merge_ledger.py:460-488",
+      "source": "panel:ollama",
+      "sources": [
+        "panel:ollama"
+      ],
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "note": "VERIFIED FIXED. merge_ledger.py:471-481 wraps the open/parse in try/except (OSError, ValueError) \u2014 covers missing file, IsADirectoryError, JSONDecodeError and UnicodeDecodeError \u2014 prints a message naming vpath and exits 1 before any ledger write. Selftest asserts no traceback and an untouched ledger.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "open"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "minor/panel_review.py:ollama-num-ctx-silent-clamp",
+      "claim": "The num_ctx fix sizes the context from the prompt but then clamps it with min(..., num_ctx_max default 65536) and says nothing when the clamp bites. A lane configured with max_diff_tokens above ~49k (the docstring advertises max_diff_tokens as a per-lane knob) produces a prompt that needs more than 65536 ctx, ollama silently drops the head of the prompt -- including the template's instructions and the diff stat -- and the lane result reports status ok with no warning. That is exactly the silent cap the comment at :208-210 claims to forbid, and the resulting garbage candidates are indistinguishable from a bad model.",
+      "evidence": {},
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:206-220",
+      "introduced_by_fix": false,
+      "fix_risk": "behavior: either the lane must start erroring/skipping or the result gains a truncation flag the verifier reads",
+      "current_status": "fixed",
+      "note": "Verified: run_ollama raises ValueError before any urlopen when need > num_ctx_max (panel_review.py:254-259); run_lane's except Exception turns it into a soft lane error carrying the remedy text.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "minor/panel_review.py:run-range-flag-unimplemented",
+      "claim": "The usage line documents `run <loop-dir> <round> [--range <a..b>]`, but run() reads only args[0] and args[1] and silently ignores every remaining argument -- there is no other occurrence of 'range' in the file. An orchestrator that follows the documented interface and passes --range gets no error and no diff materialization; the lanes review whatever briefs/round-<N>.diff happens to already be on disk, i.e. a stale round's diff, and the panel's findings are attributed to the wrong change.",
+      "evidence": {},
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:271-294",
+      "introduced_by_fix": false,
+      "fix_risk": "behavior: implementing --range makes run() materialize diffs it currently never touches",
+      "current_status": "fixed",
+      "note": "Verified by running `panel_review.py` with no args: prints exactly the two current usage lines ('probe [<panel.json>] [--smoke]' / 'run <loop-dir> <round>'), exit 2. The docstring line indices 4/5 match after the docstring grew.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "minor/panel_review.py:enabled-flag-unimplemented",
+      "claim": "The module docstring says run 'every enabled lane in parallel', but no lane field named enabled is ever read -- every lane in panel.json runs unconditionally. A user who disables a lane the obvious way (\"enabled\": false) still has it run; if it is a remote lane and consent was recorded once, the full diff is sent to OpenAI/Google after the user believed they had turned it off.",
+      "evidence": {},
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:233-244",
+      "introduced_by_fix": false,
+      "fix_risk": "behavior: honoring enabled changes which lanes run",
+      "current_status": "fixed",
+      "note": "Verified: run_lane returns status 'skipped', note 'disabled (enabled: false)' before makedirs/consent (panel_review.py:284-285); selftest asserts it.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "minor/panel_review.py:probe-smoke-diverges-from-run",
+      "claim": "probe --smoke did not exercise the invocation/model the run path uses, so a green setup gate did not mean the lane works (a model the account cannot access gates green, then fails every round).",
+      "evidence": {},
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:132-141",
+      "introduced_by_fix": false,
+      "fix_risk": "Threading the configured model into --smoke changes what the setup gate actually calls and can turn a currently-green gate red; it is user-visible probe behavior.",
+      "current_status": "partial",
+      "note": "CORE FIXED, ONE EDGE REMAINS -> BACKLOG. Verified: probe() now defaults to os.path.join('.review-loop','panel.json') when no arg (panel_review.py:140-141); the selftest drives the documented bare probe(['--smoke']) from a temp cwd and asserts the configured model 'o4-max' reached the real runner and codex.smoke=='ok' (panel_selftest.py:246-259); mutant probe-default-panel-path-reverted KILLED (errors 0). Secondary cwd divergence is moot in the documented path (probe from repo root => os.getcwd() == run's repo). REMAINING EDGE: on FIRST setup the documented order is probe THEN write panel.json (SKILL.md:111-120 \u2014 'To offer it: ... probe --smoke and present the available lanes ... Record the answer in TWO files'), so at probe time .review-loop/panel.json does not yet exist and the model the human just chose is still never smoked \u2014 exactly the failure the fix's own comment (panel_review.py:135-139) cites. The fix therefore only covers re-probes of an already-configured checkout. Cheap BACKLOG fix: one line in SKILL.md step 2b telling the orchestrator to re-run `probe --smoke` after writing panel.json (and have probe state in its output when it found no panel.json and is smoking CLI defaults).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "partial"
+        },
+        {
+          "round": 2,
+          "status": "partial"
+        }
+      ],
+      "rejections": [
+        {
+          "round": 2,
+          "reason": "panel_lane_for is never reached: SKILL.md:112 / CONTROLS.md:233 invoke `probe --smoke` with no panel.json path, so panel is None and the configured model is still not threaded."
+        }
+      ]
+    },
+    {
+      "id": "architecture/panel_review.py:candidates-in-ledger-fragment-namespace",
+      "claim": "panel_review.py writes its non-ledger artifacts (round-<N>-<lane>.candidates.json, and the verifier's round-<N>-panel.verified.json) into fragments/, the directory the Stop hook polices as LEDGER fragments -- these filenames DO match subagent_guard's FRAGMENT_NAME regex, so the feature only works because ce34f74 patched the guard with a name exemption. That coupling is already broken in practice: the guard the hook actually executes comes from ${CLAUDE_PLUGIN_ROOT} (the installed plugin, highest cached version 0.10.0), no installed copy contains PANEL_NAME, and the exemption exists only in the unreleased 0.11.0 working tree. Observed live in this session: the Stop hook fired 'fragment .review-loop/fragments/round-0-ollama.candidates.json is invalid (finding <no id> missing id)'. Every panel round trips a false fragment-validation failure until the plugin cache is republished, and any future guard/panel version skew reintroduces it.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:233-269",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "note": "Verified: artifacts go to <loop>/fragments/panel/ (panel_review.py:288-291); PANEL_NAME is gone from subagent_guard.sh so the flat namespace is policed again (selftest asserts both directions -- panel subdir ignored, flat *.candidates.json blocks with exit 2); 'panel' as a listdir entry does not match FRAGMENT_NAME so the subdir is inert. agents/panel-verifier.md:21,23 and SKILL.md:166,227 name the new paths; grep finds no stale flat panel path anywhere in the plugin. Live .review-loop/fragments/ holds only seed.json + panel/.",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "tests/panel_selftest.py:no-assertion-consent-not-read-from-panel-json",
+      "claim": "panel_selftest.py never asserts the security invariant behind the panel-consent-travels-in-git fix: no test writes consent into the git-tracked panel.json and asserts it is IGNORED. Every consent check in the suite passes trivially because panel-consent.json is simply absent, so re-adding a `panel.get('consent')` fallback to load_consent would leave all checks green while re-arming committed consent to authorize egress and shell on a cloned checkout.",
+      "evidence": {},
+      "severity": "minor",
+      "region": "tests/panel_selftest.py:35-98",
+      "first_seen_round": 1,
+      "introduced_by_fix": true,
+      "status_history": [
+        {
+          "round": 1,
+          "status": "open"
+        },
+        {
+          "round": 2,
+          "status": "open"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        }
+      ],
+      "current_status": "fixed",
+      "note": "VERIFIED FIXED. The fixture panel.json now embeds consent in BOTH withdrawn shapes (nested `consent` object and top-level `remote_lanes_approved`/`cmd_lanes_approved`), and the cmd list holds the real sha256 of good_cmd plus the exact strings of the failcmd/tampered lanes (panel_selftest.py:56-66) \u2014 so any fallback flips the assertions rather than passing vacuously. Asserted at :87 (load_consent(loop) == {}) and end-to-end at :92 (good AND tampered still skipped). Mutation run confirms: mutant load-consent-panel-json-fallback-rearmed KILLED, errors 0, mismatches 0. Full suite rerun by me: ALL 36 CHECKS PASSED."
+    },
+    {
+      "id": "docs/CONTROLS.md:consent-design-not-propagated-to-mirror-copies",
+      "claim": "The repo-root CONTROLS.md and qa-loop-tools/CONTROLS.md were byte-identical PRE-FIX copies of review-loop-tools/CONTROLS.md, still documenting the withdrawn git-tracked-consent design ('panel.json records consent.remote_lanes_approved') that load_consent() deliberately ignores, and still promising 'ollama, nothing leaves the machine' with no OLLAMA_HOST caveat.",
+      "evidence": {},
+      "severity": "major",
+      "region": "CONTROLS.md:220-247",
+      "first_seen_round": 2,
+      "introduced_by_fix": true,
+      "status_history": [
+        {
+          "round": 2,
+          "status": "open"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        }
+      ],
+      "current_status": "fixed",
+      "rejections": [],
+      "note": "VERIFIED FIXED by hash: all three copies now md5 46eca2faf37a65d0cff3d919e752bed9 (root, qa-loop-tools, review-loop-tools), matching the implementer's claim, and the shared text carries the untracked panel-consent.json design, the cmd_lanes_approved exact-string/digest list, the command-STRING-not-file-contents caveat, and the loopback OLLAMA_HOST caveat. find shows exactly three CONTROLS.md in the tree, so no fourth copy drifted. review-loop-tools/README.md:83-89 independently documents the untracked file correctly (it never mentions cmd lanes, so nothing to sync there)."
+    },
+    {
+      "id": "security/panel_review.py:cmd-consent-hash-covers-invocation-not-script",
+      "claim": "cmd_approved() binds consent to the command STRING only, so an approved lane whose cmd invokes a git-tracked script (e.g. `bash tools/panel_lane.sh`) keeps its approval verbatim while the script's contents change under a git pull, branch switch or merged PR. Nothing at the consent prompt told the human that approving an indirect command also approves whatever that file becomes.",
+      "evidence": {},
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:90-101",
+      "first_seen_round": 2,
+      "introduced_by_fix": true,
+      "status_history": [
+        {
+          "round": 2,
+          "status": "open"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        }
+      ],
+      "current_status": "fixed",
+      "rejections": [],
+      "note": "VERIFIED FIXED as scoped (doc-only was my own round-2 scoping). The caveat is present in all five places claimed: module docstring panel_review.py:34-37, SKILL.md:125-128 (explicitly at the consent prompt: 'Tell the human at the consent prompt'), and all three CONTROLS.md copies (identical md5). RESIDUAL, deliberately punted to BACKLOG: cmd_approved() still hashes only the invocation, so the technical exposure is unchanged \u2014 a human who approves `bash tools/lane.sh` still gets unattended execution of whatever that file becomes. BACKLOG item: hash the contents of any local file named in an approved cmd, or refuse cmds that reference repo-relative script paths."
+    },
+    {
+      "id": "correctness/panel_review.py:probe-crash-on-malformed-panel-json",
+      "claim": "The new default panel path makes bare `panel_review.py probe [--smoke]` read .review-loop/panel.json unguarded, so a truncated or hand-edited panel.json aborts the setup gate with a raw json.decoder.JSONDecodeError traceback and a nonzero exit instead of reporting lane availability. Before this closeout, bare probe never touched the file and was immune; the gate is precisely where a human has just hand-written panel.json, so malformed JSON is the likely case, and the traceback names no remedy.",
+      "evidence": [
+        "review-loop-tools/scripts/panel_review.py:140-141",
+        "review-loop-tools/scripts/panel_review.py:64-68",
+        "review-loop-tools/scripts/panel_review.py:428-433"
+      ],
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:132-142",
+      "first_seen_round": 3,
+      "introduced_by_fix": true,
+      "fix_risk": "Swallowing the parse error changes probe's shipped output/exit status at the setup gate (silently smoking CLI defaults vs failing loudly), so the fix must print an explicit 'panel.json unreadable' row rather than fall back silently.",
+      "status_history": [
+        {
+          "round": 3,
+          "status": "open"
+        }
+      ],
+      "current_status": "open",
+      "rejections": [],
+      "note": "CONFIRMED by execution: in a scratch dir containing .review-loop/panel.json = '{\"lanes\": [ broken', `python3 panel_review.py probe` exits nonzero with a full JSONDecodeError traceback (main() at :428-433 has no try). load_json (:64-68) only guards nonexistence, not malformed content. Fix: try/except around the default-path load, emit {\"panel\": \"unreadable: <err>\"} into the probe output and continue with panel=None."
+    },
+    {
+      "id": "tests/CONTROLS.md:mirror-sync-unenforced",
+      "claim": "HANDOFF.md:68-70 makes repo-root CONTROLS.md canonical and requires a manual cp-sync into both loop plugins, but nothing in the repo verifies it: no test, no guard script and no pre-commit check compares the three copies. That unenforced convention is exactly what produced the round-2 major (two of three copies shipped the withdrawn git-tracked-consent design for a full loop), and the closeout re-synced by hand without adding any guard, so the next doc edit drifts the same way.",
+      "evidence": [
+        "HANDOFF.md:68-70",
+        "CONTROLS.md:1",
+        "qa-loop-tools/CONTROLS.md:1",
+        "review-loop-tools/CONTROLS.md:1"
+      ],
+      "severity": "minor",
+      "region": "review-loop-tools/tests/panel_selftest.py:1-30",
+      "first_seen_round": 3,
+      "introduced_by_fix": false,
+      "status_history": [
+        {
+          "round": 3,
+          "status": "open"
+        }
+      ],
+      "current_status": "open",
+      "rejections": [],
+      "note": "CONFIRMED: grep for 'CONTROLS.md' across all *.py and *.sh in the repo matches only nothing outside the docs themselves (commit_guard.sh does not check it), and `find -name CONTROLS.md` returns exactly the three copies. BACKLOG fix is three lines: assert md5(root) == md5(qa) == md5(review) in panel_selftest.py (or in commit_guard.sh, which already runs pre-commit)."
+    }
+  ],
+  "scope": "pre-multi-provider-panel..HEAD",
+  "panel": {
+    "0": {
+      "ollama": {
+        "filed": 10,
+        "confirmed": 0,
+        "demoted": 1,
+        "rejected": 9
+      }
+    },
+    "final": {
+      "ollama": {
+        "filed": 10,
+        "confirmed": 0,
+        "demoted": 0,
+        "rejected": 10
+      }
+    }
+  },
+  "usage": {
+    "0": {
+      "reviewer": 77456,
+      "panel-verifier": 90004
+    },
+    "1": {
+      "implementer": 95013,
+      "reviewer": 67036
+    },
+    "2": {
+      "implementer": 92330,
+      "reviewer": 97145,
+      "panel-verifier": 64683
+    }
+  },
+  "round_shas": {
+    "1": "9a029145ed2e1d9f7254627caf53d934214285df",
+    "2": "f6a99362b2004d1f93f420f42534c784d8620457"
+  }
+}

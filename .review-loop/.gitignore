@@ -1,0 +1,9 @@
+# Conclusions in git; evidence and scratch on disk. Managed by review-loop-tools v0.11.0.
+*
+!*/
+!.gitignore
+!REPORT.md
+!ledger.json
+!rounds.md
+!verdict.json
+!panel.json
