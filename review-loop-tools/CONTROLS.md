@@ -237,7 +237,10 @@ when the CLIs exist.*
   command from git-tracked panel.json, a `cmd_lanes_approved` LIST of the
   exact approved command strings or their sha256 digests — a pulled
   panel.json that changes the command fails the gate) and the script
-  refuses those lanes without it — consent never travels in git.
+  refuses those lanes without it — consent never travels in git. Approval
+  binds the command STRING, not the contents of any file it invokes
+  (`bash tools/lane.sh` stays approved while lane.sh changes under a
+  pull) — prefer self-contained commands.
   Gemini's free OAuth tier may train on inputs — use API keys
   (`OPENAI_API_KEY`, `GEMINI_API_KEY`, environment only, never in
   panel.json). Private repo → local lane only (ollama on a loopback

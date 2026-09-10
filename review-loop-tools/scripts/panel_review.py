@@ -12,7 +12,9 @@ daemon); --smoke additionally makes one tiny live call per remote lane so
 "configured" means "works right now" — run it at the setup gate, because a
 lane that needs an interactive browser login cannot recover mid-loop. The
 smoke goes through the SAME runner the run path uses, so a green gate means
-the real invocation works, not a look-alike one.
+the real invocation works, not a look-alike one. With no <panel.json> arg,
+probe reads .review-loop/panel.json under the cwd (the setup gate runs from
+the repo root) so the smoke exercises the CONFIGURED lanes, not defaults.
 
 run: read <loop-dir>/panel.json, build one diff-only prompt from the round's
 briefs/round-<N>.stat + .diff plus the shared template, and run every enabled
@@ -29,7 +31,10 @@ diff leaves the machine (codex, gemini, ollama with a non-loopback
 OLLAMA_HOST) need remote_lanes_approved: true; cmd lanes execute a shell
 string from panel.json and need that EXACT string (or its sha256 hex digest)
 listed in cmd_lanes_approved — consent is bound to the command, so a pulled
-panel.json that changes the command re-prompts instead of executing.
+panel.json that changes the command re-prompts instead of executing. The
+binding covers the command STRING only, not the contents of any file it
+invokes (`bash tools/lane.sh` stays approved while lane.sh changes under a
+pull) — prefer self-contained commands.
 
 Phase 1 is diff-only for every lane: the model sees the stat and the diff,
 not the repo. Candidates carry no IDs and no status — the panel-verifier
@@ -127,7 +132,13 @@ def smoke_lane(kind, lane_cfg=None):
 def probe(args):
     smoke = "--smoke" in args
     args = [a for a in args if a != "--smoke"]
-    panel = load_json(args[0]) if args else None
+    # No explicit path: read the loop's panel.json from the cwd (the setup
+    # gate runs from the repo root). The documented invocation is a bare
+    # `probe --smoke`, and a probe that silently ignored the configured
+    # panel would smoke the CLIs' DEFAULT models — a model the account
+    # cannot access would gate green and then fail every round.
+    panel = load_json(args[0] if args
+                      else os.path.join(".review-loop", "panel.json"))
     out = {}
 
     codex = shutil.which("codex")

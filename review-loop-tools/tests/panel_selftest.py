@@ -7,11 +7,13 @@ remote OLLAMA_HOST, cmd), exact-host loopback classification (no '127.'
 prefix spoof; scheme-less OLLAMA_HOST), cmd consent bound to the exact
 command string, the enabled flag, the fragments/panel/ namespace,
 string-aware extract_json, the oversized-backtick fence, the loud num_ctx
-clamp, smoke_lane threading the configured model, panel-tally shape AND
+clamp, smoke_lane threading the configured model, consent embedded in the
+git-tracked panel.json being IGNORED, bare `probe --smoke` reading
+.review-loop/panel.json from the cwd, panel-tally shape AND
 JSON-parse validation, render_report tolerance of a poisoned panel row,
 and the subagent guard's flat-vs-panel-subdir behavior.
 """
-import hashlib, json, os, re, shutil, subprocess, sys, tempfile
+import contextlib, hashlib, io, json, os, re, shutil, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "scripts")
@@ -50,7 +52,18 @@ def make_loop(root):
             {"name": "off", "type": "cmd", "cmd": "true", "enabled": False},
             {"name": "codexlane", "type": "codex"},
             {"name": "local", "type": "ollama"},
-        ]}, fh)
+        ],
+            # Consent fields written INTO the git-tracked panel.json — the
+            # withdrawn design. They must authorize NOTHING: a committed
+            # consent would arm egress and shell on every clone. The cmd
+            # list even holds the exact approved strings/digests, so any
+            # panel.json fallback in load_consent flips the checks below.
+            "consent": {"remote_lanes_approved": True,
+                        "cmd_lanes_approved": True},
+            "remote_lanes_approved": True,
+            "cmd_lanes_approved": [
+                hashlib.sha256(good_cmd.encode()).hexdigest(),
+                "exit 3", "echo pulled-in-cmd"]}, fh)
     return loop, good_cmd
 
 def run_panel(root, env_extra=None):
@@ -65,12 +78,20 @@ def main():
     try:
         loop, good_cmd = make_loop(td)
 
-        # --- no consent file: every egress/shell-capable lane is skipped.
-        # OLLAMA_HOST here is scheme-less AND a '127.' prefix spoof: it must
-        # parse (normalized scheme) and still gate as remote (exact host).
+        # --- no panel-consent.json, but panel.json ITSELF carries consent
+        # fields (including the exact approved cmd digests): every
+        # egress/shell-capable lane must still be skipped — tracked consent
+        # never authorizes. OLLAMA_HOST here is scheme-less AND a '127.'
+        # prefix spoof: it must parse (normalized scheme) and still gate as
+        # remote (exact host).
+        ok(pr.load_consent(loop) == {},
+           "load_consent never reads consent embedded in tracked panel.json")
         lanes = run_panel(td, {"OLLAMA_HOST": "127.0.0.1.evil.com:11434"})
         ok(lanes["badcmd"]["status"] == "skipped", "cmd lane gated without cmd consent")
         ok(lanes["codexlane"]["status"] == "skipped", "codex gated without remote consent")
+        ok(lanes["good"]["status"] == "skipped"
+           and lanes["tampered"]["status"] == "skipped",
+           "consent carried in git-tracked panel.json authorizes NOTHING")
         ok(lanes["local"]["status"] == "skipped"
            and "127.0.0.1.evil.com" in lanes["local"]["note"],
            "'127.' prefix-spoof OLLAMA_HOST gated as remote, endpoint named")
@@ -145,6 +166,42 @@ def main():
                "smoke_lane passes the configured model into the real runner")
         finally:
             pr.RUNNERS["codex"] = real
+
+        # --- bare `probe --smoke` (the skill's documented invocation, no
+        # panel.json path) reads .review-loop/panel.json from the cwd and
+        # smokes the CONFIGURED model, not the CLI default ---
+        proot = os.path.join(td, "proberoot")
+        os.makedirs(os.path.join(proot, ".review-loop"))
+        with open(os.path.join(proot, ".review-loop", "panel.json"), "w") as fh:
+            json.dump({"lanes": [{"name": "codex", "type": "codex",
+                                  "model": "o4-max"}]}, fh)
+        seen.clear()
+        real_run, real_which = pr.subprocess.run, pr.shutil.which
+        real_open = pr.urllib.request.urlopen
+        cwd, buf = os.getcwd(), io.StringIO()
+
+        def _no_daemon(*a, **kw):
+            raise OSError("selftest: no ollama daemon")
+        try:
+            pr.RUNNERS["codex"] = fake_runner
+            pr.shutil.which = lambda n: "/fake/codex" if n == "codex" else None
+            pr.subprocess.run = lambda *a, **kw: type(
+                "R", (), {"returncode": 0, "stdout": "logged in", "stderr": ""})()
+            pr.urllib.request.urlopen = _no_daemon
+            os.chdir(proot)
+            with contextlib.redirect_stdout(buf):
+                pr.probe(["--smoke"])
+        finally:
+            os.chdir(cwd)
+            pr.RUNNERS["codex"] = real
+            pr.subprocess.run, pr.shutil.which = real_run, real_which
+            pr.urllib.request.urlopen = real_open
+        probe_out = json.loads(buf.getvalue())
+        ok(seen.get("model") == "o4-max"
+           and probe_out["codex"]["smoke"] == "ok"
+           and probe_out["codex"].get("configured") is True,
+           "bare probe --smoke picks up .review-loop/panel.json from cwd "
+           "and threads the configured model into the smoke")
 
         # --- panel-tally validates shape BEFORE writing ---
         ml = os.path.join(SCRIPTS, "merge_ledger.py")

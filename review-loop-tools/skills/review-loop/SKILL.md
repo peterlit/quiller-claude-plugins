@@ -122,7 +122,10 @@ You orchestrate an iterative review loop between the `implementer` and
    cmd_lanes_approved: [<exact cmd string or its sha256 hex digest>, ...],
    approved_by, date}` — the script refuses remote lanes without consent
    and refuses a cmd lane whose command string is not in that list, so a
-   command changed by a git pull re-prompts instead of executing. panel-consent.json is deliberately
+   command changed by a git pull re-prompts instead of executing. Tell the
+   human at the consent prompt: approval binds the command STRING, not the
+   contents of any file it runs — `bash tools/lane.sh` keeps its approval
+   while lane.sh changes under a pull, so prefer self-contained commands. panel-consent.json is deliberately
    ABSENT from the gitignore allowlist and never committed: consent is
    per-checkout, given by the human at the keyboard — a consent that
    traveled in git would authorize egress and shell execution on other
