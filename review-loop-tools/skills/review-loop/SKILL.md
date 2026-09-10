@@ -119,8 +119,10 @@ You orchestrate an iterative review loop between the `implementer` and
    arbitrary command that reads the prompt on stdin) and
    `rounds: "seed+final"`; and the consent in
    `.review-loop/panel-consent.json` as `{remote_lanes_approved: <bool>,
-   cmd_lanes_approved: <bool>, approved_by, date}` — the script refuses
-   remote and cmd lanes without it. panel-consent.json is deliberately
+   cmd_lanes_approved: [<exact cmd string or its sha256 hex digest>, ...],
+   approved_by, date}` — the script refuses remote lanes without consent
+   and refuses a cmd lane whose command string is not in that list, so a
+   command changed by a git pull re-prompts instead of executing. panel-consent.json is deliberately
    ABSENT from the gitignore allowlist and never committed: consent is
    per-checkout, given by the human at the keyboard — a consent that
    traveled in git would authorize egress and shell execution on other

@@ -471,8 +471,16 @@ def panel_tally(args):
     path, rnd, vpath = args[0], args[1], args[2]
     # rnd is a round number OR the label "final" (the post-stop panel pass).
     key = str(int(rnd)) if str(rnd).isdigit() else str(rnd)
-    with open(vpath) as fh:
-        verified = json.load(fh)
+    # verified.json is LLM-verifier output: a missing or malformed file must
+    # produce the same clean nothing-written failure as a bad shape, not a
+    # raw JSONDecodeError traceback.
+    try:
+        with open(vpath, encoding="utf-8") as fh:
+            verified = json.load(fh)
+    except (OSError, ValueError) as e:
+        print(f"merge_ledger: cannot read {vpath} as JSON ({e}); "
+              "nothing written", file=sys.stderr)
+        sys.exit(1)
     tallies = verified.get("lane_tallies") if isinstance(verified, dict) else None
     # Validate the SHAPE before touching the ledger: this file is written by
     # an LLM verifier, and a malformed row ({"ollama": 10}) persisted here

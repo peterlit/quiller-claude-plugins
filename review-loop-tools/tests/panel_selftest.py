@@ -3,12 +3,15 @@
 never touches a live .review-loop/. Exits nonzero on the first failure.
 
 Covers: lane-failure softness, destination-based consent gates (codex,
-remote OLLAMA_HOST, cmd), the enabled flag, the fragments/panel/ namespace,
+remote OLLAMA_HOST, cmd), exact-host loopback classification (no '127.'
+prefix spoof; scheme-less OLLAMA_HOST), cmd consent bound to the exact
+command string, the enabled flag, the fragments/panel/ namespace,
 string-aware extract_json, the oversized-backtick fence, the loud num_ctx
-clamp, panel-tally shape validation, render_report tolerance of a poisoned
-panel row, and the subagent guard's flat-vs-panel-subdir behavior.
+clamp, smoke_lane threading the configured model, panel-tally shape AND
+JSON-parse validation, render_report tolerance of a poisoned panel row,
+and the subagent guard's flat-vs-panel-subdir behavior.
 """
-import json, os, re, shutil, subprocess, sys, tempfile
+import hashlib, json, os, re, shutil, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "scripts")
@@ -42,11 +45,13 @@ def make_loop(root):
         json.dump({"lanes": [
             {"name": "badcmd", "type": "cmd"},           # missing cmd key
             {"name": "good", "type": "cmd", "cmd": good_cmd},
+            {"name": "failcmd", "type": "cmd", "cmd": "exit 3"},
+            {"name": "tampered", "type": "cmd", "cmd": "echo pulled-in-cmd"},
             {"name": "off", "type": "cmd", "cmd": "true", "enabled": False},
             {"name": "codexlane", "type": "codex"},
             {"name": "local", "type": "ollama"},
         ]}, fh)
-    return loop
+    return loop, good_cmd
 
 def run_panel(root, env_extra=None):
     env = dict(os.environ, **(env_extra or {}))
@@ -58,26 +63,47 @@ def run_panel(root, env_extra=None):
 def main():
     td = tempfile.mkdtemp(prefix="panel-selftest-")
     try:
-        loop = make_loop(td)
+        loop, good_cmd = make_loop(td)
 
-        # --- no consent file: every egress/shell-capable lane is skipped ---
-        lanes = run_panel(td, {"OLLAMA_HOST": "http://gpu.example:11434"})
+        # --- no consent file: every egress/shell-capable lane is skipped.
+        # OLLAMA_HOST here is scheme-less AND a '127.' prefix spoof: it must
+        # parse (normalized scheme) and still gate as remote (exact host).
+        lanes = run_panel(td, {"OLLAMA_HOST": "127.0.0.1.evil.com:11434"})
         ok(lanes["badcmd"]["status"] == "skipped", "cmd lane gated without cmd consent")
         ok(lanes["codexlane"]["status"] == "skipped", "codex gated without remote consent")
         ok(lanes["local"]["status"] == "skipped"
-           and "gpu.example" in lanes["local"]["note"],
-           "non-loopback OLLAMA_HOST gated as a remote lane, endpoint named")
+           and "127.0.0.1.evil.com" in lanes["local"]["note"],
+           "'127.' prefix-spoof OLLAMA_HOST gated as remote, endpoint named")
         ok(lanes["off"]["status"] == "skipped", "enabled:false honored")
 
-        # --- consent present: bad lane soft-errors, good lane files ---
+        # --- loopback is exact-host, never a prefix; scheme-less parses ---
+        ok(not pr.is_loopback("https://127.0.0.1.evil.com"),
+           "127.-prefixed DNS name is NOT loopback")
+        ok(not pr.is_loopback("http://127.0.0.1.nip.io:11434"),
+           "127.-prefixed nip.io name is NOT loopback")
+        ok(not pr.is_loopback("http://gpu.example:11434"), "remote host not loopback")
+        ok(pr.is_loopback("127.0.0.1:11434"),
+           "ollama's scheme-less OLLAMA_HOST form is loopback")
+        ok(pr.is_loopback("localhost:11434") and pr.is_loopback("http://[::1]:11434")
+           and pr.is_loopback("http://127.5.4.3:11434"),
+           "localhost, ::1 and the whole 127/8 block are loopback")
+
+        # --- consent present, BOUND to the exact command string ---
         with open(os.path.join(loop, "panel-consent.json"), "w") as fh:
             json.dump({"remote_lanes_approved": False,
-                       "cmd_lanes_approved": True}, fh)
+                       "cmd_lanes_approved": [
+                           hashlib.sha256(good_cmd.encode()).hexdigest(),
+                           "exit 3"]}, fh)
         lanes = run_panel(td, {"OLLAMA_HOST": "http://gpu.example:11434"})
-        ok(lanes["badcmd"]["status"] == "error"
-           and "KeyError" in lanes["badcmd"]["note"],
-           "misconfigured lane is a soft error, not a panel abort")
+        ok(lanes["badcmd"]["status"] == "skipped",
+           "cmd lane with no command string can never be approved")
+        ok(lanes["tampered"]["status"] == "skipped",
+           "unapproved (pulled-in) cmd string is gated despite cmd consent")
+        ok(lanes["failcmd"]["status"] == "error",
+           "approved failing lane is a soft error, not a panel abort")
         ok(lanes["good"]["status"] == "ok", "good lane still files (map not aborted)")
+        ok(not pr.cmd_approved({"cmd_lanes_approved": True}, "echo x"),
+           "legacy boolean cmd consent no longer approves anything")
         cand = lanes["good"]["candidates"]
         ok("/fragments/panel/" in cand.replace(os.sep, "/"),
            "candidates live in fragments/panel/, not the policed flat namespace")
@@ -104,6 +130,22 @@ def main():
         except ValueError:
             ok(True, "run_ollama raises instead of silently clamping num_ctx")
 
+        # --- smoke exercises the CONFIGURED lane: model reaches the runner ---
+        panel_cfg = {"lanes": [{"name": "cx", "type": "codex", "model": "o4-max"}]}
+        ok((pr.panel_lane_for(panel_cfg, "codex") or {}).get("model") == "o4-max",
+           "panel_lane_for finds the configured lane by type")
+        seen = {}
+        def fake_runner(lane, prompt, repo, timeout):
+            seen.update(lane); return "ok", None
+        real = pr.RUNNERS["codex"]
+        try:
+            pr.RUNNERS["codex"] = fake_runner
+            ok(pr.smoke_lane("codex", pr.panel_lane_for(panel_cfg, "codex")) == "ok"
+               and seen.get("model") == "o4-max",
+               "smoke_lane passes the configured model into the real runner")
+        finally:
+            pr.RUNNERS["codex"] = real
+
         # --- panel-tally validates shape BEFORE writing ---
         ml = os.path.join(SCRIPTS, "merge_ledger.py")
         ledger = os.path.join(td, "ledger.json")
@@ -116,6 +158,15 @@ def main():
         ok(r.returncode == 1, "panel-tally rejects non-dict lane tallies")
         ok(json.load(open(ledger)) == {"findings": []},
            "rejected tally wrote NOTHING to the ledger")
+        broken = os.path.join(td, "broken.json")
+        with open(broken, "w") as fh:
+            fh.write('{"lane_tallies": {truncated')
+        r = sh([sys.executable, ml, "panel-tally", ledger, "0", broken])
+        ok(r.returncode == 1 and "Traceback" not in r.stderr
+           and "nothing written" in r.stderr,
+           "panel-tally fails cleanly on malformed JSON, no traceback")
+        ok(json.load(open(ledger)) == {"findings": []},
+           "malformed verified.json wrote NOTHING to the ledger")
         goodv = os.path.join(td, "good.json")
         with open(goodv, "w") as fh:
             fh.write('{"lane_tallies": {"ollama": {"filed": 5, "confirmed": 2,'

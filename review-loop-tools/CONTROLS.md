@@ -233,9 +233,11 @@ when the CLIs exist.*
   (`panel_review.py probe --smoke`) and asks for consent.
 - **Consent and privacy** `[review]` — codex/gemini lanes send the diff off
   the machine; the untracked per-checkout `.review-loop/panel-consent.json`
-  records `remote_lanes_approved` (and `cmd_lanes_approved` for `cmd`
-  lanes, which execute a command from git-tracked panel.json) and the
-  script refuses those lanes without it — consent never travels in git.
+  records `remote_lanes_approved` (and, for `cmd` lanes, which execute a
+  command from git-tracked panel.json, a `cmd_lanes_approved` LIST of the
+  exact approved command strings or their sha256 digests — a pulled
+  panel.json that changes the command fails the gate) and the script
+  refuses those lanes without it — consent never travels in git.
   Gemini's free OAuth tier may train on inputs — use API keys
   (`OPENAI_API_KEY`, `GEMINI_API_KEY`, environment only, never in
   panel.json). Private repo → local lane only (ollama on a loopback

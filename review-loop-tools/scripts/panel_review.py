@@ -27,20 +27,30 @@ UNTRACKED, per-checkout file, never panel.json (which travels in git and
 must not authorize egress or shell on other people's machines): lanes whose
 diff leaves the machine (codex, gemini, ollama with a non-loopback
 OLLAMA_HOST) need remote_lanes_approved: true; cmd lanes execute a shell
-string from panel.json and need cmd_lanes_approved: true.
+string from panel.json and need that EXACT string (or its sha256 hex digest)
+listed in cmd_lanes_approved — consent is bound to the command, so a pulled
+panel.json that changes the command re-prompts instead of executing.
 
 Phase 1 is diff-only for every lane: the model sees the stat and the diff,
 not the repo. Candidates carry no IDs and no status — the panel-verifier
 agent verifies them against the code and only the skeptical-reviewer (the
 chair) ever writes the ledger fragment.
 """
-import concurrent.futures, json, os, re, shutil, subprocess, sys, tempfile
+import concurrent.futures, hashlib, ipaddress, json, os, re, shutil
+import subprocess, sys, tempfile
 import urllib.error, urllib.parse, urllib.request
 
 SEVERITIES = {"blocker", "major", "minor"}
 CAP = 10                      # top-N by confidence; the false-positive flood control
 CHARS_PER_TOKEN = 4           # rough cap arithmetic for max_diff_tokens
-OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+def normalize_url(u):
+    """Ollama's documented OLLAMA_HOST form is scheme-less (127.0.0.1:11434);
+    without a scheme urlsplit parses the host as a path, so both the loopback
+    check and urlopen would misread it. Default the scheme, not the host."""
+    return u if "://" in u else "http://" + u
+
+OLLAMA_URL = normalize_url(os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
 
 def template_path():
     here = os.path.dirname(os.path.abspath(__file__))
@@ -53,8 +63,17 @@ def load_json(path, default=None):
         return json.load(fh)
 
 def is_loopback(url):
-    host = urllib.parse.urlsplit(url).hostname or ""
-    return host in ("localhost", "::1") or host.startswith("127.")
+    """Loopback means the hostname IS a loopback address — 'localhost' or an
+    IP that parses as loopback. Never a prefix match: '127.0.0.1.evil.com'
+    is a routable DNS name, and treating it as local would ship the diff
+    off-machine with no consent prompt."""
+    host = urllib.parse.urlsplit(normalize_url(url)).hostname or ""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 def load_consent(loop):
     """Consent is per-checkout state, read ONLY from the untracked
@@ -63,15 +82,41 @@ def load_consent(loop):
     c = load_json(os.path.join(loop, "panel-consent.json"), {})
     return c if isinstance(c, dict) else {}
 
+def cmd_approved(consent, cmd):
+    """cmd-lane consent is bound to the EXACT command string, never a bare
+    capability bit: cmd_lanes_approved is a list holding the approved command
+    strings (or their sha256 hex digests). The executed string lives in
+    git-tracked panel.json, so a boolean opt-in would let a later git pull
+    silently change what runs under shell=True — a changed command must fail
+    the gate and re-prompt instead."""
+    approved = consent.get("cmd_lanes_approved")
+    if not isinstance(approved, list) or not cmd:
+        return False
+    digest = hashlib.sha256(cmd.encode("utf-8")).hexdigest()
+    return cmd in approved or digest in approved
+
 # ---------------------------------------------------------------- probe ----
 
-def smoke_lane(kind):
-    """One tiny live call through the real runner (same argv, same stdin
-    plumbing, codex under the same read-only sandbox)."""
+def panel_lane_for(panel, kind):
+    """The configured lane of this type from panel.json, if any — the smoke
+    must exercise the lane AS CONFIGURED (its model above all: a model the
+    account cannot access is the top misconfiguration, and smoking the CLI's
+    default model would green-light it at the setup gate)."""
+    for lane in (panel or {}).get("lanes", []):
+        if lane.get("type", lane.get("name")) == kind:
+            return lane
+    return None
+
+def smoke_lane(kind, lane_cfg=None):
+    """One tiny live call through the real runner (same argv including the
+    configured model, same stdin plumbing, same cwd as the run path, codex
+    under the same read-only sandbox)."""
     with tempfile.TemporaryDirectory() as td:
-        lane = {"name": kind, "_out_base": os.path.join(td, "smoke")}
+        lane = dict(lane_cfg or {})
+        lane.update({"name": kind, "_out_base": os.path.join(td, "smoke")})
         try:
-            raw, proc = RUNNERS[kind](lane, "reply with the single word ok", td, 120)
+            raw, proc = RUNNERS[kind](lane, "reply with the single word ok",
+                                      os.getcwd(), 120)
         except Exception as e:
             return f"failed: {e}"
         if proc is not None and proc.returncode != 0:
@@ -98,7 +143,7 @@ def probe(args):
         except Exception as e:
             st["auth_detail"] = [f"probe failed: {e}"]
         if smoke and st["auth"] == "ok":
-            st["smoke"] = smoke_lane("codex")
+            st["smoke"] = smoke_lane("codex", panel_lane_for(panel, "codex"))
         out["codex"] = st
 
     gemini = shutil.which("gemini")
@@ -116,7 +161,7 @@ def probe(args):
         else:
             st["auth"] = "needs-login"
         if smoke and st["auth"] != "needs-login":
-            st["smoke"] = smoke_lane("gemini")
+            st["smoke"] = smoke_lane("gemini", panel_lane_for(panel, "gemini"))
         out["gemini"] = st
 
     # Always name the resolved endpoint: a consent decision made on "local"
@@ -299,10 +344,12 @@ def run_lane(lane, loop, rnd, repo, consent):
                 "note": f"OLLAMA_HOST {OLLAMA_URL} is not loopback — the diff "
                         f"would leave this machine; needs remote-lane consent "
                         f"in panel-consent.json"}
-    if kind == "cmd" and not consent.get("cmd_lanes_approved"):
+    if kind == "cmd" and not cmd_approved(consent, lane.get("cmd", "")):
         return {"lane": name, "status": "skipped",
                 "note": "cmd lanes execute shell from git-tracked panel.json; "
-                        "needs cmd_lanes_approved in panel-consent.json (untracked)"}
+                        "this exact command is not approved — add the command "
+                        "string or its sha256 to the cmd_lanes_approved list "
+                        "in panel-consent.json (untracked)"}
     runner = RUNNERS.get(kind)
     if not runner:
         return {"lane": name, "status": "skipped", "note": f"unknown type '{kind}'"}
