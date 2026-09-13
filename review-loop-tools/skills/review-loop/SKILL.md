@@ -85,7 +85,7 @@ You orchestrate an iterative review loop between the `implementer` and
    pre-existing `.gitignore` is the host's — leave it and suggest the
    upgrade in one line:
    ```
-   # Conclusions in git; evidence and scratch on disk. Managed by review-loop-tools v0.11.0.
+   # Conclusions in git; evidence and scratch on disk. Managed by review-loop-tools v0.12.0.
    *
    !*/
    !.gitignore

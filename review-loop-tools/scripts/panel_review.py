@@ -120,8 +120,19 @@ def consent_path(loop):
     by this human on this machine' — a bundle unpacked inside any checkout
     reads as untracked). So consent lives under the user's config dir, keyed
     by the sha256 of the loop dir's realpath (realpath so relative
-    invocations and symlink aliases resolve to one file)."""
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    invocations and symlink aliases resolve to one file). XDG_CONFIG_HOME is
+    honored only when ABSOLUTE: a relative value resolves against the
+    process cwd — i.e. potentially inside the reviewed checkout — which
+    would hand the 'machine-local' store back to whatever a clone or
+    unpacked bundle carries, re-arming exactly the attack this path
+    exists to close."""
+    base = os.environ.get("XDG_CONFIG_HOME")
+    if base and not os.path.isabs(base):
+        print(f"panel_review: ignoring relative XDG_CONFIG_HOME ({base!r}) — "
+              f"consent must live outside any checkout; using ~/.config",
+              file=sys.stderr)
+        base = None
+    base = base or os.path.expanduser("~/.config")
     key = hashlib.sha256(os.path.realpath(loop).encode("utf-8")).hexdigest()
     return os.path.join(base, "review-loop-tools", "consent", key + ".json")
 
@@ -151,8 +162,21 @@ def load_consent(loop):
 def consent_path_cmd(args):
     """`consent-path [<loop-dir>]`: print where consent for this loop lives,
     so the human at the setup gate (and the docs) never have to compute the
-    hash by hand."""
-    print(consent_path(args[0] if args else ".review-loop"))
+    hash by hand. Creates the consent DIRECTORY so the printed path is
+    immediately writable on a fresh machine, and refuses a loop dir that
+    does not exist — the key is the resolved path, so consent hashed from a
+    typo'd or wrong-cwd loop dir would be written where no run ever reads
+    it, with 'no consent, lanes skipped' as the only symptom."""
+    loop = args[0] if args else ".review-loop"
+    if not os.path.isdir(loop):
+        print(f"panel_review: loop dir {loop!r} does not exist — consent is "
+              f"keyed by the loop dir's resolved path, so consent written "
+              f"for a nonexistent dir would never be read. Run from the "
+              f"repo root or pass the loop dir explicitly", file=sys.stderr)
+        sys.exit(2)
+    p = consent_path(loop)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    print(p)
 
 def cmd_approved(consent, cmd):
     """cmd-lane consent is bound to the EXACT command string, never a bare
@@ -350,6 +374,11 @@ def sanitize(obj, lane):
         # candidate — a TypeError here would discard the whole lane batch.
         sev = f.get("severity")
         sev = sev.strip().lower() if isinstance(sev, str) else ""
+        if sev and sev not in SEVERITIES:
+            # Out-of-vocabulary STRING ('warning', 'critical', 'info'):
+            # clamp to a default instead of silently dropping the finding —
+            # the verifier adjudicates severity anyway.
+            sev = "minor"
         if not f.get("claim") or sev not in SEVERITIES:
             continue
         ev = f.get("evidence")
@@ -467,7 +496,9 @@ def run_ollama(lane, prompt, repo, timeout):
     # for 40k on an 8k model truncates the prompt while prompt_eval_count
     # lands near 8k, far below `need`, so only a pre-call refusal against
     # the trained context catches it.
-    model_ctx = ollama_model_ctx(model)
+    # Bounded by the lane timeout: a 1s lane must not block ~10s extra on
+    # metadata before generate even starts.
+    model_ctx = ollama_model_ctx(model, min(timeout, 10))
     if model_ctx is None:
         # /api/show failed or carried no *.context_length (llama.cpp server,
         # LM Studio, older ollama): the clamp guard below is INERT this run.
@@ -541,11 +572,15 @@ def safe_lane_name(name):
     sanitizing CHANGED the name, append a digest of the raw one: otherwise
     'gemini-2.5-pro' and 'gemini-2_5-pro' (or two names sharing the first
     64 safe chars) collide on one output base and the concurrent lanes
-    silently overwrite each other's candidates. Today's clean names
-    ('codex', 'gemini') stay byte-identical."""
+    silently overwrite each other's candidates. A raw name that already
+    LOOKS suffixed (ends in -8hex) gets a suffix too: otherwise the literal
+    lane name 'a_b-<digest of a.b>' passes through unchanged and collides
+    with the sanitized 'a.b' — suffixed outputs and passthrough outputs
+    must stay disjoint. Today's clean names ('codex', 'gemini') stay
+    byte-identical."""
     raw = str(name or "lane")
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", raw)[:64] or "lane"
-    if safe != raw:
+    if safe != raw or re.search(r"-[0-9a-f]{8}$", raw):
         safe += "-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
     return safe
 

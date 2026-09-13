@@ -30,7 +30,7 @@ def finding_line(f):
         bits.append(f"fix_risk `{f['fix_risk']}`")
     if f.get("introduced_by_fix"):
         bits.append("introduced_by_fix")
-    if f.get("source"):
+    if f.get("source") or f.get("sources"):
         srcs = f.get("sources") or [f["source"]]
         # 'sources' is a list by schema, but an LLM-written fragment can slip
         # a bare string ("+".join would emit p+a+n+e+l) or a non-iterable.

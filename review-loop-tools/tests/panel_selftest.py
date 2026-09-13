@@ -774,6 +774,91 @@ def main():
             pr.subprocess.run = real_sub
             os.environ.pop("CLAUDE_SELFTEST_LEAK", None)
 
+        # ================= closeout additions ============================
+
+        # --- consent_path never honors a RELATIVE XDG_CONFIG_HOME: resolved
+        # against the cwd it can land INSIDE the reviewed checkout, handing
+        # the 'machine-local' store back to whatever a clone or unpacked
+        # bundle carries — the bundled-archive attack, re-armed ---
+        hermetic_xdg = os.environ["XDG_CONFIG_HOME"]
+        try:
+            os.environ["XDG_CONFIG_HOME"] = ".config"    # attacker-relative
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                p_rel = pr.consent_path(loop)
+            del os.environ["XDG_CONFIG_HOME"]
+            ok(os.path.isabs(p_rel) and p_rel == pr.consent_path(loop),
+               "relative XDG_CONFIG_HOME ignored — consent falls back to "
+               "~/.config, never a cwd-relative dir")
+            ok("XDG_CONFIG_HOME" in buf.getvalue(),
+               "ignored relative XDG_CONFIG_HOME is called out on stderr")
+        finally:
+            os.environ["XDG_CONFIG_HOME"] = hermetic_xdg
+
+        # --- consent-path verb: creates the consent dir (printed path is
+        # writable on a FRESH machine) and refuses a nonexistent loop dir
+        # (typo'd cwd would write consent no run ever reads) ---
+        try:
+            os.environ["XDG_CONFIG_HOME"] = os.path.join(td, "xdg-fresh")
+            r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                    "consent-path", gloop])
+            ok(r.returncode == 0
+               and os.path.isdir(os.path.dirname(r.stdout.strip())),
+               "consent-path creates the consent dir — printed path "
+               "immediately writable on a fresh machine")
+            r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                    "consent-path", os.path.join(td, "no-such-loop")])
+            ok(r.returncode != 0 and not r.stdout.strip()
+               and "does not exist" in r.stderr,
+               "consent-path refuses a nonexistent loop dir instead of "
+               "printing a path no run will ever read")
+        finally:
+            os.environ["XDG_CONFIG_HOME"] = hermetic_xdg
+
+        # --- safe_lane_name: a sanitized output re-minted as a raw lane
+        # name must not collide with the original's output base ---
+        ok(pr.safe_lane_name(pr.safe_lane_name("a.b"))
+           != pr.safe_lane_name("a.b"),
+           "raw lane name spelled as a sanitized output gets its own "
+           "suffix — no self-collision on one output base")
+        ok(pr.safe_lane_name("codex") == "codex",
+           "clean unsuffixed-looking names still pass through byte-identical")
+
+        # --- sanitize: out-of-vocabulary severity STRING clamps, not drops ---
+        s2 = pr.sanitize({"findings": [
+            {"claim": "warn", "evidence": ["a:1"], "severity": "Warning"}]},
+            "l")
+        ok(s2["filed"] == 1 and s2["findings"][0]["severity"] == "minor",
+           "unknown severity string ('Warning') clamps to minor instead of "
+           "silently dropping the candidate")
+
+        # --- render_report: 'sources'-only finding still renders its tags ---
+        line2 = rr.finding_line({"id": "y", "severity": "minor",
+                                 "current_status": "open",
+                                 "sources": ["codex", "gemini"]})[0]
+        ok("via codex+gemini" in line2,
+           "'sources' without a singular 'source' key still renders "
+           "attribution")
+
+        # --- ollama /api/show metadata call bounded by the lane timeout ---
+        tcalls = []
+        def fake_ollama_t(req, t):
+            url = req.full_url if hasattr(req, "full_url") else req
+            tcalls.append((url, t))
+            if url.endswith("/api/show"):
+                return FakeResp({"model_info": {"qwen3.context_length": 65536}})
+            return FakeResp({"response": "r", "prompt_eval_count": 100})
+        real_open_url = pr.open_url
+        try:
+            pr.open_url = fake_ollama_t
+            pr.run_ollama({"num_ctx_max": 65536}, "x" * 1000, td, 3)
+            show_t = [t for u, t in tcalls if u.endswith("/api/show")]
+            ok(show_t and all(t <= 3 for t in show_t),
+               "ollama_model_ctx metadata call inherits the lane timeout "
+               "(capped at 10s), not a hardcoded 10s")
+        finally:
+            pr.open_url = real_open_url
+
         # --- CONTROLS.md mirrors stay byte-identical (HANDOFF.md cp-sync) ---
         repo = os.path.abspath(os.path.join(HERE, "..", ".."))
         digests = {p: hashlib.md5(open(os.path.join(repo, p), "rb").read())

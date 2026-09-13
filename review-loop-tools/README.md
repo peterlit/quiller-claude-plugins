@@ -68,7 +68,7 @@ on different models, a partial guard against correlated blind spots.
 to, implementer/reviewer model diversity silently collapses — edit the reviewer's
 `model:` pin (in `agents/skeptical-reviewer.md`) to restore it.*
 
-## Multi-provider review panel (0.11.0, optional)
+## Multi-provider review panel (0.12.0, optional)
 
 Model pins decorrelate within one model family; the panel decorrelates
 across families. When enabled, external models — OpenAI's codex CLI,
