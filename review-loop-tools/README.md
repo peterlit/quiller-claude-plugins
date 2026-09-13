@@ -80,9 +80,11 @@ code, and only verified findings reach the chair reviewer, tagged
 `via panel:<lane>`. The panel runs on the seed diff and once more after the
 loop stops (`seed+final`), so metrics and convergence are untouched.
 
-Remote lanes require recorded consent in `.review-loop/panel-consent.json`
-— an untracked, per-checkout file, so consent never travels in git and a
-cloned config cannot authorize egress on someone else's machine (the diff
+Remote lanes require recorded consent in a machine-local file under
+`~/.config/review-loop-tools/consent/` (`panel_review.py consent-path`
+prints the exact path; `$XDG_CONFIG_HOME` is respected) — never a file
+inside the repo, so neither a cloned config nor a consent file shipped in
+an unpacked archive can authorize egress on someone else's machine (the diff
 leaves your machine; prefer API-key auth — Gemini's free OAuth tier may
 train on inputs). The local ollama lane sends nothing anywhere when
 `OLLAMA_HOST` is loopback (the default); pointed at a shared GPU box it is

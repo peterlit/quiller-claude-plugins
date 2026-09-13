@@ -444,7 +444,10 @@ def archive(args):
     KEEP = {"WORKFLOWS.md", "TESTCASES.md", "HARNESS_NOTES.md", "BACKLOG.md",
             ".gitignore", "archive", "evidence", "tools", "driver", "scratch",
             "notes", "panel.json",   # panel lane config survives across loops
-            "panel-consent.json"}    # per-checkout consent (untracked) survives too
+            "panel-consent.json"}    # legacy in-repo consent: IGNORED by
+    # panel_review since consent moved machine-local (~/.config), but left
+    # in place so its every-run stderr hint keeps firing until the human
+    # deletes it deliberately.
     for entry in sorted(os.listdir(loop_dir)):
         src = os.path.join(loop_dir, entry)
         if entry in KEEP or not os.path.isfile(src):

@@ -5,6 +5,7 @@ blind verifier adjudicates before anything reaches the ledger.
 Usage:
   panel_review.py probe [<panel.json>] [--smoke]
   panel_review.py run <loop-dir> <round>
+  panel_review.py consent-path [<loop-dir>]
 
 probe: report which lanes are installed and whether their auth looks usable.
 Fast checks by default (binaries, credential files, env vars, the ollama
@@ -24,9 +25,14 @@ findings by confidence — the flood cap) and its raw output to
 fragments/panel/round-<N>-<lane>.raw.txt for debugging. (fragments/panel/ is
 deliberately OUTSIDE the Stop hook's flat ledger-fragment scan.) A lane that
 times out, errors, or lacks consent is SKIPPED with a note — the panel never
-blocks a round. Consent lives in <loop-dir>/panel-consent.json — an
-UNTRACKED, per-checkout file, never panel.json (which travels in git and
-must not authorize egress or shell on other people's machines): lanes whose
+blocks a round. Consent is MACHINE-LOCAL state the reviewed repo cannot
+carry: it lives at $XDG_CONFIG_HOME/review-loop-tools/consent/<sha256 of the
+loop dir's realpath>.json (XDG_CONFIG_HOME defaults to ~/.config; the
+consent-path verb prints the exact file), written by the human at the setup
+gate. NOTHING inside the repo may authorize egress or shell: panel.json
+travels in git, and an in-repo panel-consent.json — cloned, force-added, or
+shipped inside a ZIP/`git archive`/cp -r bundle unpacked anywhere — is
+IGNORED with a stderr hint. Lanes whose
 diff leaves the machine (codex, gemini, ollama with a non-loopback
 OLLAMA_HOST) need remote_lanes_approved: true; cmd lanes execute a shell
 string from panel.json and need that EXACT string (or its sha256 hex digest)
@@ -41,7 +47,9 @@ not the repo — codex/gemini run in an empty scratch cwd with a scrubbed env
 so their file tools have no workspace to read, and loopback ollama traffic
 bypasses HTTP(S)_PROXY so "local" cannot silently route off-machine.
 KNOWN RESIDUAL: codex's --sandbox read-only still permits ABSOLUTE-path
-reads (no tighter codex flag exists today), so the jail removes workspace
+reads (no tighter codex flag exists today; gemini ships a -s/--sandbox flag
+whose semantics we have not verified or adopted — for both lanes the empty
+jail, not a vendor sandbox, is the isolation), so the jail removes workspace
 DISCOVERY, not read capability — a prompt injection in the reviewed diff
 that already knows a path could read (never write) files outside the diff. Candidates carry no IDs and no
 status — the panel-verifier
@@ -103,84 +111,48 @@ def open_url(req, timeout):
         return opener.open(req, timeout=timeout)
     return urllib.request.urlopen(req, timeout=timeout)
 
-def consent_git_status(path):
-    """A consent file that TRAVELS IN GIT is the exact attack load_consent
-    exists to prevent — `git add -f` bypasses the .gitignore convention, so
-    ask git directly whether the file is tracked. rc semantics matter: 0 is
-    tracked, 1 is untracked, and ANYTHING ELSE (128: dubious ownership in a
-    container/CI, corrupt index, not a repo; git missing; the timeout) means
-    git COULD NOT ANSWER — report 'unknown', never conflate it with
-    'untracked' or a force-committed consent is honored exactly in the
-    unattended environments where nobody is watching."""
-    try:
-        r = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(path)),
-                            "ls-files", "--error-unmatch", os.path.basename(path)],
-                           capture_output=True, timeout=10)
-    except Exception:
-        return "unknown"
-    return {0: "tracked", 1: "untracked"}.get(r.returncode, "unknown")
-
-def in_git_worktree(path):
-    """Filesystem-level 'is this inside a checkout': any .git (dir, or file
-    for worktrees/submodules) up the tree. Splits 'git could not answer'
-    into its two honest cases — a checkout git refuses to read could be
-    hiding a force-committed consent (fail closed unconditionally), while
-    'no checkout anywhere' is still only ABSENCE of evidence: ZIP downloads,
-    `git archive`, and cp -r all strip .git while keeping a force-added
-    consent file, so that case needs the explicit PANEL_REVIEW_CONSENT_NO_GIT
-    opt-in, never a silent honor."""
-    d = os.path.dirname(os.path.abspath(path))
-    while True:
-        if os.path.exists(os.path.join(d, ".git")):
-            return True
-        parent = os.path.dirname(d)
-        if parent == d:
-            return False
-        d = parent
+def consent_path(loop):
+    """The machine-local consent file for this loop dir. Consent must be
+    state the reviewed repo CANNOT carry: a git clone, a force-added file,
+    and a ZIP/`git archive`/cp -r bundle all ship attacker-chosen files WITH
+    the payload, and git tracked-ness is no trust boundary ('untracked'
+    proves only 'not committed to whatever repo sits above', never 'created
+    by this human on this machine' — a bundle unpacked inside any checkout
+    reads as untracked). So consent lives under the user's config dir, keyed
+    by the sha256 of the loop dir's realpath (realpath so relative
+    invocations and symlink aliases resolve to one file)."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    key = hashlib.sha256(os.path.realpath(loop).encode("utf-8")).hexdigest()
+    return os.path.join(base, "review-loop-tools", "consent", key + ".json")
 
 def load_consent(loop):
-    """Consent is per-checkout state, read ONLY from the untracked
-    panel-consent.json — never from git-tracked panel.json, so a file that
-    arrives with a clone cannot approve egress or shell execution. A
-    force-committed panel-consent.json is refused for the same reason; an
-    unreadable one, or one whose tracked-ness git CANNOT CONFIRM, fails
-    CLOSED (no consent), never with a traceback. Outside any checkout the
-    same attack survives .git removal (ZIP download, `git archive`, cp -r
-    keep force-added files), so no-.git is NOT consent either: deliberate
-    non-repo use must set PANEL_REVIEW_CONSENT_NO_GIT=1 (the selftest's
-    tempdirs do)."""
-    path = os.path.join(loop, "panel-consent.json")
-    if not os.path.exists(path):
-        return {}
-    status = consent_git_status(path)
-    if status == "tracked":
-        print("panel_review: panel-consent.json is TRACKED in git — consent "
-              "must be per-checkout; ignoring it (git rm --cached it, then "
-              "re-consent locally)", file=sys.stderr)
-        return {}
-    if status == "unknown":
-        if in_git_worktree(path):
-            # Inside a checkout, git-can't-answer could be hiding a
-            # force-committed consent — no env var may weaken this.
-            print("panel_review: cannot verify panel-consent.json is "
-                  "untracked (git could not answer inside this checkout) — "
-                  "failing CLOSED, no consent", file=sys.stderr)
-            return {}
-        if os.environ.get("PANEL_REVIEW_CONSENT_NO_GIT") != "1":
-            print("panel_review: no git checkout found above "
-                  "panel-consent.json, so git cannot vouch it is untracked "
-                  "— failing CLOSED (ZIP/`git archive`/cp -r exports keep a "
-                  "force-added consent file while stripping .git). For "
-                  "deliberate non-repo use set PANEL_REVIEW_CONSENT_NO_GIT=1",
-                  file=sys.stderr)
-            return {}
+    """Consent is MACHINE-LOCAL: read ONLY from consent_path(loop), written
+    by the human at the setup gate — never from anything inside the repo.
+    An in-repo panel-consent.json (the pre-0.12 location, or one shipped by
+    a clone/bundle) authorizes NOTHING and earns a stderr hint; existing
+    checkouts re-consent once at the new path. A malformed or non-object
+    consent file fails CLOSED (no consent), never with a traceback."""
+    legacy = os.path.join(loop, "panel-consent.json")
+    path = consent_path(loop)
+    if os.path.exists(legacy):
+        print(f"panel_review: {legacy} is IGNORED — files inside the repo "
+              f"can arrive with a clone or an unpacked bundle and must never "
+              f"authorize egress or shell. Machine-local consent lives at "
+              f"{path} (re-consent there; delete the in-repo file to silence "
+              f"this)", file=sys.stderr)
     try:
         c = load_json(path, {})
     except (ValueError, OSError) as e:
-        print(f"panel_review: panel-consent.json unreadable ({e}) — treating "
-              f"as NO consent", file=sys.stderr)
+        print(f"panel_review: consent file {path} unreadable ({e}) — "
+              f"treating as NO consent", file=sys.stderr)
         return {}
     return c if isinstance(c, dict) else {}
+
+def consent_path_cmd(args):
+    """`consent-path [<loop-dir>]`: print where consent for this loop lives,
+    so the human at the setup gate (and the docs) never have to compute the
+    hash by hand."""
+    print(consent_path(args[0] if args else ".review-loop"))
 
 def cmd_approved(consent, cmd):
     """cmd-lane consent is bound to the EXACT command string, never a bare
@@ -541,7 +513,7 @@ def run_cmd(lane, prompt, repo, timeout):
     """Generic lane: any command that reads the prompt on stdin and prints
     the candidates JSON on stdout. The escape hatch for CLIs we don't know,
     and the fixture hook for testing the panel plumbing offline. Gated by
-    cmd_lanes_approved in the untracked panel-consent.json — panel.json is
+    cmd_lanes_approved in the machine-local consent file — panel.json is
     git-tracked and must never be sufficient to execute shell. Runs in its
     own process GROUP so a timeout kills the shell's children too, not just
     the shell (subprocess.run's timeout leaves pipeline/background children
@@ -595,19 +567,21 @@ def run_lane(lane, loop, rnd, repo, consent):
     # Consent gates by DESTINATION and capability, not lane type alone.
     if kind in ("codex", "gemini") and not consent.get("remote_lanes_approved"):
         return {"lane": name, "status": "skipped",
-                "note": "no remote-lane consent in panel-consent.json (untracked)"}
+                "note": "no remote-lane consent (machine-local consent file; "
+                        "`panel_review.py consent-path <loop>` prints it)"}
     if kind == "ollama" and not is_loopback(OLLAMA_URL) \
             and not consent.get("remote_lanes_approved"):
         return {"lane": name, "status": "skipped",
                 "note": f"OLLAMA_HOST {OLLAMA_URL} is not loopback — the diff "
                         f"would leave this machine; needs remote-lane consent "
-                        f"in panel-consent.json"}
+                        f"in the machine-local consent file"}
     if kind == "cmd" and not cmd_approved(consent, lane.get("cmd", "")):
         return {"lane": name, "status": "skipped",
                 "note": "cmd lanes execute shell from git-tracked panel.json; "
                         "this exact command is not approved — add the command "
                         "string or its sha256 to the cmd_lanes_approved list "
-                        "in panel-consent.json (untracked)"}
+                        "in the machine-local consent file "
+                        "(`panel_review.py consent-path <loop>` prints it)"}
     runner = RUNNERS.get(kind)
     if not runner:
         return {"lane": name, "status": "skipped", "note": f"unknown type '{kind}'"}
@@ -692,11 +666,13 @@ def run(args):
                       "candidates_files": [r["candidates"] for r in ok]}, indent=2))
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("probe", "run"):
-        print(__doc__.strip().splitlines()[4].strip() + "\n" +
-              __doc__.strip().splitlines()[5].strip(), file=sys.stderr)
+    verbs = {"probe": probe, "run": run, "consent-path": consent_path_cmd}
+    if len(sys.argv) < 2 or sys.argv[1] not in verbs:
+        print("\n".join(l.strip()
+                        for l in __doc__.strip().splitlines()[4:7]),
+              file=sys.stderr)
         sys.exit(2)
-    (probe if sys.argv[1] == "probe" else run)(sys.argv[2:])
+    verbs[sys.argv[1]](sys.argv[2:])
 
 if __name__ == "__main__":
     main()

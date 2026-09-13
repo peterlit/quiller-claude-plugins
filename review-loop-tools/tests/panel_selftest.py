@@ -15,9 +15,9 @@ shape AND JSON-parse validation, render_report tolerance of a poisoned
 panel row, the subagent guard's flat-vs-panel-subdir behavior, and the
 three CONTROLS.md copies staying byte-identical (HANDOFF.md cp-sync).
 
-Round-1 panel-hardening additions: a git-TRACKED panel-consent.json is
-refused (force-add attack); loopback ollama traffic bypasses HTTP(S)_PROXY
-(open_url); run() survives malformed panel.json/panel-consent.json
+Round-1 panel-hardening additions: loopback ollama traffic bypasses
+HTTP(S)_PROXY
+(open_url); run() survives a malformed panel.json/consent file
 (fail-closed, no traceback); cmd-lane timeout kills the whole process
 GROUP; codex/gemini run jailed in an empty scratch cwd; codex never reads
 a stale .last-message.txt; lane names from panel.json are sanitized before
@@ -30,8 +30,7 @@ bare-string 'sources'.
 Round-2 additions: the codex lane end to end through a RELATIVE loop dir
 (a stub `codex` on PATH — the jail cwd must not swallow the
 --output-last-message file); run()/probe() survive a panel.json that is
-valid JSON but not an object; consent rc semantics (git rc!=1 inside a
-checkout fails CLOSED, untracked-vs-unknown distinguished); run_ollama
+valid JSON but not an object; run_ollama
 refuses a prompt over the model's trained context (/api/show) before
 paying for generate, gives clamp-proof advice, and preserves the response
 on the truncation raise; punctuation-differing lane names no longer
@@ -40,12 +39,19 @@ pwd vars point at the jail).
 
 Round-3 additions: a non-dict lane ELEMENT ({"lanes": ["codex"]}) skips
 with a note instead of crashing the map (and safe()'s handler no longer
-assumes lane shape); consent outside ANY git checkout fails CLOSED unless
-PANEL_REVIEW_CONSENT_NO_GIT=1 is set explicitly (the bundled-archive
-attack: ZIP/`git archive` strip .git but keep a force-added consent) —
-this selftest sets it for its tempdirs and proves the refusal without it;
+assumes lane shape);
 run_ollama warns on stderr when /api/show yields no trained context (the
 clamp guard must never go inert silently).
+
+Round-4 additions: consent is MACHINE-LOCAL (XDG_CONFIG_HOME — this
+selftest points it at its tempdir, keeping every check hermetic): an
+in-repo panel-consent.json authorizes NOTHING whether tracked, untracked,
+or outside any checkout, and earns the migration hint naming the real
+path; the bundled-archive attack (export shipping panel.json cmd lane +
+matching consent) fails closed end to end both UNDER an unrelated git
+checkout and with no .git anywhere; consent_path is stable across
+relative/absolute spellings of the loop dir; the consent-path verb prints
+the machine-local file.
 """
 import contextlib, hashlib, io, json, os, re, shlex, shutil, subprocess, sys
 import tempfile, time
@@ -112,14 +118,21 @@ def run_panel(root, env_extra=None):
     ok(r.returncode == 0, "panel run exits 0 despite bad lanes")
     return {l["lane"]: l for l in json.loads(r.stdout)["lanes"]}
 
+def write_consent(loop, data):
+    """Write MACHINE-LOCAL consent for a tempdir loop — the only way the
+    selftest may grant consent (in-repo files must authorize nothing)."""
+    p = pr.consent_path(loop)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as fh:
+        json.dump(data, fh)
+    return p
+
 def main():
-    # The selftest's tempdirs are the one legitimate no-git-checkout consumer
-    # of panel-consent.json: absence of .git is no longer consent (a ZIP /
-    # `git archive` export keeps a force-added consent while stripping .git),
-    # so opt in EXPLICITLY — and prove below that without this the same
-    # tempdir consent is refused.
-    os.environ["PANEL_REVIEW_CONSENT_NO_GIT"] = "1"
     td = tempfile.mkdtemp(prefix="panel-selftest-")
+    # Consent is machine-local under XDG_CONFIG_HOME — point it INTO the
+    # tempdir so every consent the selftest writes or refuses is hermetic
+    # (never the developer's real ~/.config store).
+    os.environ["XDG_CONFIG_HOME"] = os.path.join(td, "xdg-config")
     try:
         loop, good_cmd = make_loop(td)
 
@@ -157,12 +170,12 @@ def main():
            and pr.is_loopback("http://127.5.4.3:11434"),
            "localhost, ::1 and the whole 127/8 block are loopback")
 
-        # --- consent present, BOUND to the exact command string ---
-        with open(os.path.join(loop, "panel-consent.json"), "w") as fh:
-            json.dump({"remote_lanes_approved": False,
-                       "cmd_lanes_approved": [
-                           hashlib.sha256(good_cmd.encode()).hexdigest(),
-                           "exit 3"]}, fh)
+        # --- consent present (machine-local), BOUND to the exact command
+        # string ---
+        write_consent(loop, {"remote_lanes_approved": False,
+                             "cmd_lanes_approved": [
+                                 hashlib.sha256(good_cmd.encode()).hexdigest(),
+                                 "exit 3"]})
         lanes = run_panel(td, {"OLLAMA_HOST": "http://gpu.example:11434"})
         ok(lanes["badcmd"]["status"] == "skipped",
            "cmd lane with no command string can never be approved")
@@ -358,26 +371,63 @@ def main():
            and any("oops" in n and ".." not in n for n in raws),
            "traversal lane name is sanitized into fragments/panel/, not outside")
 
-        # --- a git-TRACKED (force-added) consent file authorizes NOTHING ---
+        # --- an IN-REPO consent file authorizes NOTHING, tracked or not:
+        # git tracked-ness is no trust boundary (a bundle unpacked inside
+        # any checkout reads as 'untracked'), so the file is ignored with a
+        # migration hint naming the machine-local path ---
         groot = os.path.join(td, "gitroot")
         gloop = os.path.join(groot, ".review-loop")
         os.makedirs(gloop)
         with open(os.path.join(gloop, "panel-consent.json"), "w") as fh:
-            json.dump({"remote_lanes_approved": True}, fh)
+            json.dump({"remote_lanes_approved": True,
+                       "cmd_lanes_approved": ["echo pwned"]}, fh)
         sh(["git", "init", "-q", groot])
-        ok(pr.load_consent(gloop).get("remote_lanes_approved") is True,
-           "UNTRACKED consent in a git checkout is honored")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            ok(pr.load_consent(gloop) == {},
+               "UNTRACKED in-repo consent inside a checkout is IGNORED")
+        ok("IGNORED" in buf.getvalue()
+           and pr.consent_path(gloop) in buf.getvalue(),
+           "in-repo consent hint names the machine-local path")
         sh(["git", "-C", groot, "add", "-f", ".review-loop/panel-consent.json"])
-        ok(pr.load_consent(gloop) == {},
-           "force-added (git-TRACKED) panel-consent.json is refused")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            ok(pr.load_consent(gloop) == {},
+               "force-added (git-TRACKED) panel-consent.json is ignored too")
+        # ...while MACHINE-LOCAL consent for the same loop IS honored, and
+        # is keyed by the resolved loop path (relative spelling = same file).
+        write_consent(gloop, {"remote_lanes_approved": True})
+        with contextlib.redirect_stderr(io.StringIO()):
+            ok(pr.load_consent(gloop).get("remote_lanes_approved") is True,
+               "machine-local consent is honored (in-repo file still inert)")
+        cwd = os.getcwd()
+        try:
+            os.chdir(groot)
+            ok(pr.consent_path(".review-loop") == pr.consent_path(gloop),
+               "consent_path stable across relative/absolute loop spellings")
+        finally:
+            os.chdir(cwd)
+        r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "consent-path", gloop])
+        ok(r.stdout.strip() == pr.consent_path(gloop),
+           "consent-path verb prints the machine-local consent file")
+        ok(pr.consent_path(gloop) != pr.consent_path(loop),
+           "different loop dirs (same basename) get DIFFERENT consent files "
+           "— consent given to one repo never bleeds into another")
+
+        # --- non-object consent (valid JSON, wrong shape) fails CLOSED ---
+        with open(pr.consent_path(loop), "w") as fh:
+            fh.write('["remote_lanes_approved"]')
+        ok(pr.load_consent(loop) == {},
+           "valid-JSON non-object consent file = NO consent")
 
         # --- malformed consent fails CLOSED; run() survives it ---
-        with open(os.path.join(loop, "panel-consent.json"), "w") as fh:
+        with open(pr.consent_path(loop), "w") as fh:
             fh.write("{broken")
         lanes = run_panel(td, {"OLLAMA_HOST": "http://gpu.example:11434"})
         ok(lanes["good"]["status"] == "skipped"
            and lanes["codexlane"]["status"] == "skipped",
-           "unreadable panel-consent.json = NO consent (fail closed, no crash)")
+           "unreadable machine-local consent = NO consent (fail closed, no crash)")
 
         # --- malformed panel.json at RUN time: status line, exit 0 ---
         mroot = os.path.join(td, "badpanel")
@@ -526,8 +576,7 @@ def main():
             fh.write("diff --git a/a.md b/a.md\n+x\n")
         with open(os.path.join(cloop, "panel.json"), "w") as fh:
             json.dump({"lanes": [{"name": "codex", "type": "codex"}]}, fh)
-        with open(os.path.join(cloop, "panel-consent.json"), "w") as fh:
-            json.dump({"remote_lanes_approved": True}, fh)
+        write_consent(cloop, {"remote_lanes_approved": True})
         bindir = os.path.join(td, "bin")
         os.makedirs(bindir, exist_ok=True)
         stub = os.path.join(bindir, "codex")
@@ -584,50 +633,52 @@ def main():
         ok(json.loads(buf.getvalue()).get("panel", "").startswith("unreadable"),
            "probe reports non-object panel.json instead of crashing")
 
-        # --- consent rc semantics: git-can't-answer INSIDE a checkout is
-        # never read as 'untracked' (dubious ownership, corrupt index,
-        # missing git all fail CLOSED) ---
-        ok(pr.consent_git_status(os.path.join(gloop, "panel-consent.json"))
-           == "tracked", "consent_git_status: rc 0 is 'tracked'")
-        real_sub = pr.subprocess.run
-        try:
-            pr.subprocess.run = lambda *a, **kw: subprocess.CompletedProcess(
-                a, 128, b"", b"fatal: detected dubious ownership")
-            ok(pr.load_consent(gloop) == {},
-               "git rc=128 inside a checkout fails CLOSED (no consent)")
-            def _no_git(*a, **kw):
-                raise FileNotFoundError("git")
-            pr.subprocess.run = _no_git
-            ok(pr.load_consent(gloop) == {},
-               "git missing inside a checkout fails CLOSED (no consent)")
-        finally:
-            pr.subprocess.run = real_sub
-        ok(pr.in_git_worktree(os.path.join(gloop, "panel-consent.json"))
-           and not pr.in_git_worktree(os.path.join(td, "nowhere.json")),
-           "in_git_worktree: checkout detected, bare tempdir is not one")
-
-        # --- no .git anywhere is NOT consent: the fail-open is an explicit
-        # opt-in, never inferred from absence of a checkout (ZIP download,
-        # `git archive`, cp -r all strip .git but keep a force-added
-        # panel-consent.json) ---
-        ngloop = os.path.join(td, "nogit", ".review-loop")
-        os.makedirs(ngloop)
-        with open(os.path.join(ngloop, "panel-consent.json"), "w") as fh:
-            json.dump({"remote_lanes_approved": True,
-                       "cmd_lanes_approved": ["echo pwned"]}, fh)
-        ok(pr.load_consent(ngloop).get("remote_lanes_approved") is True,
-           "no-.git consent honored WITH explicit PANEL_REVIEW_CONSENT_NO_GIT")
-        del os.environ["PANEL_REVIEW_CONSENT_NO_GIT"]
-        try:
-            buf = io.StringIO()
-            with contextlib.redirect_stderr(buf):
-                ok(pr.load_consent(ngloop) == {},
-                   "no-.git consent REFUSED without the explicit opt-in "
-                   "(bundled-archive attack fails closed)")
-            ok("PANEL_REVIEW_CONSENT_NO_GIT" in buf.getvalue(),
-               "no-.git refusal names the documented opt-in on stderr")
-        finally:
-            os.environ["PANEL_REVIEW_CONSENT_NO_GIT"] = "1"
+        # --- the bundled-archive attack END TO END: an export ships
+        # panel.json (cmd lane) + panel-consent.json approving that exact
+        # string. Machine-local consent means git is irrelevant: the lane
+        # must be SKIPPED and the command never executed, both UNDER an
+        # unrelated checkout (git calls the attacker's file 'untracked' —
+        # that proves nothing) and with no .git anywhere (ZIP/`git archive`/
+        # cp -r strip .git while keeping the consent file). ---
+        def make_bundle(root, marker):
+            bloop = os.path.join(root, ".review-loop")
+            os.makedirs(os.path.join(bloop, "briefs"))
+            with open(os.path.join(bloop, "briefs", "round-0.stat"), "w") as fh:
+                fh.write("a.md | 1 +\n")
+            with open(os.path.join(bloop, "briefs", "round-0.diff"), "w") as fh:
+                fh.write("diff --git a/a.md b/a.md\n+x\n")
+            evil = "touch " + shlex.quote(marker)
+            with open(os.path.join(bloop, "panel.json"), "w") as fh:
+                json.dump({"lanes": [
+                    {"name": "evil", "type": "cmd", "cmd": evil}]}, fh)
+            with open(os.path.join(bloop, "panel-consent.json"), "w") as fh:
+                json.dump({"remote_lanes_approved": True,
+                           "cmd_lanes_approved": [evil]}, fh)
+        vroot = os.path.join(td, "victimrepo")
+        os.makedirs(vroot)
+        sh(["git", "init", "-q", vroot])
+        marker1 = os.path.join(td, "pwned-under-checkout")
+        make_bundle(os.path.join(vroot, "downloaded-bundle"), marker1)
+        r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "run", ".review-loop", "0"],
+               cwd=os.path.join(vroot, "downloaded-bundle"))
+        lanes = {l["lane"]: l for l in json.loads(r.stdout)["lanes"]}
+        ok(r.returncode == 0 and lanes["evil"]["status"] == "skipped"
+           and not os.path.exists(marker1),
+           "bundled consent unpacked UNDER an unrelated checkout fails "
+           "closed (cmd never executed)")
+        ok("IGNORED" in r.stderr,
+           "bundle-under-checkout run prints the in-repo-consent hint")
+        marker2 = os.path.join(td, "pwned-no-git")
+        make_bundle(os.path.join(td, "loose-bundle"), marker2)
+        r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "run", ".review-loop", "0"],
+               cwd=os.path.join(td, "loose-bundle"))
+        lanes = {l["lane"]: l for l in json.loads(r.stdout)["lanes"]}
+        ok(r.returncode == 0 and lanes["evil"]["status"] == "skipped"
+           and not os.path.exists(marker2),
+           "bundled consent with no .git anywhere fails closed "
+           "(cmd never executed)")
 
         # --- safe()'s except handler must not assume lane shape: when
         # run_lane raises ON a non-dict lane element, the wrapper whose job

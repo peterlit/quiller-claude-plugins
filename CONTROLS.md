@@ -218,8 +218,9 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
 
 ## Review panel (multi-provider)
 
-*Surface: `.review-loop/panel.json` (lanes, tracked) +
-`.review-loop/panel-consent.json` (consent, untracked), offered at Setup
+*Surface: `.review-loop/panel.json` (lanes, tracked) + a machine-local
+consent file under `$XDG_CONFIG_HOME`/`~/.config/review-loop-tools/consent/`
+(`panel_review.py consent-path <loop-dir>` prints it), offered at Setup
 when the CLIs exist.*
 
 - **What it is** `[review]` — external models (OpenAI's codex CLI, Google's
@@ -232,12 +233,17 @@ when the CLIs exist.*
   probes which lanes are installed and authenticated
   (`panel_review.py probe --smoke`) and asks for consent.
 - **Consent and privacy** `[review]` — codex/gemini lanes send the diff off
-  the machine; the untracked per-checkout `.review-loop/panel-consent.json`
+  the machine; the MACHINE-LOCAL consent file (outside the repo, keyed by
+  the loop dir's path — `consent-path` prints it)
   records `remote_lanes_approved` (and, for `cmd` lanes, which execute a
   command from git-tracked panel.json, a `cmd_lanes_approved` LIST of the
   exact approved command strings or their sha256 digests — a pulled
   panel.json that changes the command fails the gate) and the script
-  refuses those lanes without it — consent never travels in git. Approval
+  refuses those lanes without it. Nothing INSIDE the repo can grant
+  consent: files under a checkout arrive with clones and unpacked
+  ZIP/`git archive`/cp -r bundles, so an in-repo `panel-consent.json`
+  (the pre-0.12 location) is ignored with a stderr hint — re-consent once
+  at the machine-local path. Approval
   binds the command STRING, not the contents of any file it invokes
   (`bash tools/lane.sh` stays approved while lane.sh changes under a
   pull) — prefer self-contained commands.
@@ -250,10 +256,9 @@ when the CLIs exist.*
   env (no workspace to discover), but codex's `--sandbox read-only` still
   permits absolute-path READS — a prompt injection in the reviewed diff
   that already names a path could read (never write) files outside the
-  diff; no tighter codex sandbox flag exists today. Outside a git checkout
-  the script fails CLOSED on consent (a ZIP/`git archive` export keeps a
-  force-added consent file while stripping `.git`); deliberate non-repo
-  use requires `PANEL_REVIEW_CONSENT_NO_GIT=1`.
+  diff; no tighter codex sandbox flag exists today (gemini ships a
+  `-s/--sandbox` flag whose semantics we have not verified or adopted —
+  for both lanes the empty jail, not a vendor sandbox, is the isolation).
 - **Flood control and measurement** `[review]` — each lane files at most 10
   candidates by confidence; the report's Panel section shows per-lane
   filed/confirmed/demoted/rejected, and that kept-rate is the drop-or-keep

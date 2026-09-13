@@ -117,23 +117,27 @@ You orchestrate an iterative review loop between the `implementer` and
    in TWO files: `panel.json` with `lanes` (name, type, model, timeout_s,
    max_diff_tokens; types codex/gemini/ollama/cmd — a `cmd` lane runs an
    arbitrary command that reads the prompt on stdin) and
-   `rounds: "seed+final"`; and the consent in
-   `.review-loop/panel-consent.json` as `{remote_lanes_approved: <bool>,
+   `rounds: "seed+final"`; and the consent in the MACHINE-LOCAL file
+   printed by
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py consent-path .review-loop`
+   (under `$XDG_CONFIG_HOME`/`~/.config/review-loop-tools/consent/`, keyed
+   by the loop dir's path) as `{remote_lanes_approved: <bool>,
    cmd_lanes_approved: [<exact cmd string or its sha256 hex digest>, ...],
    approved_by, date}` — the script refuses remote lanes without consent
    and refuses a cmd lane whose command string is not in that list, so a
    command changed by a git pull re-prompts instead of executing. Tell the
    human at the consent prompt: approval binds the command STRING, not the
    contents of any file it runs — `bash tools/lane.sh` keeps its approval
-   while lane.sh changes under a pull, so prefer self-contained commands. panel-consent.json is deliberately
-   ABSENT from the gitignore allowlist and never committed: consent is
-   per-checkout, given by the human at the keyboard — a consent that
-   traveled in git would authorize egress and shell execution on other
-   developers' machines. API keys live in the environment
+   while lane.sh changes under a pull, so prefer self-contained commands.
+   Consent NEVER lives inside the repo: files under the checkout arrive
+   with clones and unpacked archives, so an in-repo `panel-consent.json`
+   (the pre-0.12 location) is ignored with a stderr hint — re-consent once
+   at the machine-local path. API keys live in the environment
    (`OPENAI_API_KEY`, `GEMINI_API_KEY`), NEVER in panel.json. A private
    repo gets the local lane only (loopback OLLAMA_HOST — the script treats
-   a remote OLLAMA_HOST as a remote lane). Both files survive archive:
-   lanes are shared config; consent is asked once per checkout.
+   a remote OLLAMA_HOST as a remote lane). panel.json survives archive
+   (lanes are shared config); consent, being outside the repo, is asked
+   once per machine+path.
 3. Seed findings — merged as ROUND 0, because the seed precedes round 1: a
    seed merged as round 1 poisons the net metric (N new, 0 closed) and makes
    a converging run look like thrashing. Three seed modes, in priority order:
