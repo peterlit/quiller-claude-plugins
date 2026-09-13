@@ -63,12 +63,19 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   would erase that round's figures).
   *In practice:* the qa gate now recommends a value (estimate × rounds
   +50%); accept it unless you have a reason not to.
-- **`HARNESS_NOTES.md` policy** `[qa]` — ~10KB ceiling, enforced: the
-  orchestrator rotates before EVERY dispatch batch, and `notes-rotate` now
-  archives the largest sections itself until the file is under the ceiling
-  (measured: it crossed 10KB four times in one loop, and heading-rotation
-  alone couldn't get it back under). Testers cap appends at ~15 lines per
-  dispatch. Cutting 86KB→6.9KB once measured 34% of per-request cost.
+- **`HARNESS_NOTES.md` policy** `[qa]` — byte ceiling, enforced: default
+  10KB, raise with `QA_NOTES_CEILING_KB` env for driver-era rigs. The
+  orchestrator rotates before EVERY dispatch batch
+  (`notes-rotate <loop> --round N`). Rotation order: prior-round
+  `## Chunk r<M>-<slug>` sections first, then general sections
+  OLDEST-first; the preamble, `[pin]`-marked headings (mark Environment),
+  and current-round chunk sections are never auto-archived. Sizes are
+  measured in BYTES — a char-count compare against the byte ceiling once
+  left an emoji-heavy 10.2-12.1KB file reporting over_ceiling with 0
+  sections rotated; and largest-first rotation archived the freshly
+  written Environment section three times in one run. Testers cap appends
+  at ~15 lines per dispatch. Cutting 86KB→6.9KB once measured 34% of
+  per-request cost.
 - **`.qa-loop/tools/`** `[qa]` — the testers' reusable rigs (image diff,
   crop, save injection) live here, indexed in the notes, committed, never
   deleted by provisioning. Measured: without it, three image-diff tools were
@@ -83,6 +90,15 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   wall-clock roughly by N; token cost unchanged.
   *In practice:* reply "use 2 testers" at the workflow-approval gate. Use 3
   only on a beefy Mac — each simulator wants 2–6 GB of RAM.
+- **Worker provisioning** `[qa]` — worker simulators are namespaced per
+  repo (`qa-worker-<hash8>-N`; two sessions once deleted each other's
+  un-namespaced workers the same minute) and REUSED across loops when
+  healthy — reuse preserves the per-device MCP simulator grants that die
+  with a recreated UDID (`--fresh` forces recreation). The manifest lands
+  in `.qa-loop/scratch/workers.json` with a `reused` flag per worker.
+  *In practice:* nothing to run by hand; if a parallel lane stalls with
+  "awaiting a response" on taps, a device lost its grant — the Stage-0
+  real-tap probe exists to catch that BEFORE the first wave.
 - **`emit_regression_tests`** `[qa]` (default false) — when on, a dedicated
   regression-test-writer turns every verified-fixed bug into an XCUITest:
   real selectors mined from your source, `XCTSkip`-guarded so an unfinished
@@ -92,6 +108,16 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   skip line, done. The first regression dispatch of a loop also sweeps
   `.qa-loop/archive/*/ledger.json` for previously-fixed-but-unguarded bugs,
   so turning the flag on late still captures earlier loops' fixes.
+- **`regression_test_arming`** `[qa]` (default `guard`) — what the writer
+  does with the XCTSkip guard. `guard`: every test stays skip-guarded until
+  a human verifies selectors (safe, but "automates nothing" in a fully
+  autonomous run). `arm-when-green`: the writer runs each test on the
+  loop-owned device and removes the guard only from tests that ran green
+  there (measured: 49 armed, 0 flaky in one autonomous loop).
+  *In practice:* set `arm-when-green` for unattended runs; keep `guard`
+  when a human reviews tests anyway. Wiring is unchanged either way: the
+  writer never touches project.pbxproj — project-file edits route through
+  qa-implementer.
 
 ## Files that are controls
 
@@ -213,8 +239,16 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   re-runs an implementer's mutation claims in an isolated worktree — "8/8
   killed" is now checkable (the implementer names its manifest in CHANGES as
   `mutations`). `[qa]` `plan_round.py` selects the targeted set and emits
-  ≤5-test-case chunk manifests from `paths(WF-n)` lines in WORKFLOWS.md and
-  `TC-x.y [persona] [smoke] [perf]` lines in TESTCASES.md; `nfr_analyze.py`
+  chunk manifests (≤5 cases, ≥3 after tiny-chunk coalescing — each dispatch
+  pays ~40-60K fixed cost) from `paths(WF-n)` lines in WORKFLOWS.md and
+  `TC-x.y [persona] [smoke] [perf]` lines in TESTCASES.md — workflow ids
+  may carry a letter suffix (`WF-9b`/`TC-9b.1`); all of a workflow's chunks
+  stay on one worker (split siblings filed duplicate findings); the perf
+  lane runs only when a perf-relevant change or finding exists; open
+  findings with screen-name regions get a `findings-misc` chunk; a
+  selected case landing in no chunk is a HARD error (a silently unchunked
+  workflow once nearly hid a blocker); `--summary` prints a human-readable
+  digest; `nfr_analyze.py`
   turns sampler output plus the tester's `marks.jsonl` windows into numbers
   and candidate findings. `[both]` `hygiene_check.sh <loop-dir>` reports
   git-hygiene violations in the loop dir (tracked scratch, Finder-duplicate

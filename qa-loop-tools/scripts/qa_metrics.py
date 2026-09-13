@@ -97,15 +97,22 @@ def promotions(findings, r):
 
 def converging_series(findings, r):
     """Every open finding is a regression the loop itself introduced, the
-    worst open severity is non-increasing over three rounds, and nothing
-    reopened: that is residue shrinking by construction, not churn."""
+    worst open severity is non-increasing over the rounds that EXIST (up to
+    three, minimum two), and nothing reopened: that is residue shrinking by
+    construction, not churn. The window adapts to short runs on purpose — a
+    hard three-round requirement meant a short capped run could never
+    qualify (measured on the review side: a converging 2-round scoped run
+    headlined "thrashing")."""
     open_now = [f for f in findings if status_at(f, r) in OPENISH]
     if not open_now or not all(f.get("introduced_by_fix") for f in open_now):
         return False
-    if not (max_open_severity(findings, r) <= max_open_severity(findings, r - 1)
-            <= max_open_severity(findings, r - 2)):
+    window = [rr for rr in (r - 2, r - 1, r) if rr >= 1]
+    if len(window) < 2:
         return False
-    return net_for(findings, r)[2] == 0 and net_for(findings, r - 1)[2] == 0
+    sevs = [max_open_severity(findings, rr) for rr in window]
+    if any(earlier < later for earlier, later in zip(sevs, sevs[1:])):
+        return False
+    return all(net_for(findings, rr)[2] == 0 for rr in window[-2:])
 
 def check_coverage(base_dir, N):
     """Returns (coverage-dict-or-None, missing, manifest_exists)."""
@@ -114,7 +121,9 @@ def check_coverage(base_dir, N):
     if not os.path.exists(tc_path):
         return None, [], True
     with open(tc_path) as fh:
-        tc_ids = sorted(set(re.findall(r"\bTC-\d+(?:\.\d+)?\b", fh.read())))
+        # Letter-suffixed workflows (WF-9b -> TC-9b.3) are real (measured: a
+        # blocker lived in one); the id grammar must accept them everywhere.
+        tc_ids = sorted(set(re.findall(r"\bTC-\d+[a-z]?(?:\.\d+)?\b", fh.read())))
     round_cov = {}
     manifest_exists = os.path.exists(cov_path)
     if manifest_exists:
@@ -195,6 +204,17 @@ def main():
     budget = ledger.get("token_budget")
     over_budget = bool(budget) and cumulative_tokens >= int(budget)
 
+    # The CONVERGING SERIES exemption guards the WHOLE churn signal, not just
+    # region churn (a measured review run tripped the net<=0-for-two-rounds
+    # branch the exemption never reached and headlined "thrashing" about a
+    # run that ended green).
+    thrash_signal = (any_reopened_twice
+                     or (net_prev is not None and net <= 0 and net_prev <= 0
+                         and post_impl(N) and post_impl(N - 1))
+                     or region_thrash)
+    if thrash_signal and converging_series(findings, N):
+        thrash_signal = False
+
     # decision, in priority order
     if blockers_open == 0 and majors_open == 0 and not new_blocker_major:
         if pass_type == "full":
@@ -203,8 +223,7 @@ def main():
             decision, reason = "full_pass_required", "convergence signals on a targeted pass; confirm with a full pass"
     elif over_budget:
         decision, reason = "budget", f"cumulative {cumulative_tokens} tokens >= token_budget {budget}; stop, closeout, report"
-    elif any_reopened_twice or (net_prev is not None and net <= 0 and net_prev <= 0
-                                and post_impl(N) and post_impl(N - 1)) or region_thrash:
+    elif thrash_signal:
         consulted_at = ledger.get("thrashing_consulted")
         if blockers_open == 0 and closed > 0 and not consulted_at:
             if N >= max_rounds:
@@ -267,8 +286,14 @@ def main():
             lines = [l for l in fh if not l.startswith(f"| {N} |")]
         with open(rounds_md, "w") as fh:
             fh.writelines(lines)
+    # An incomplete full pass must not read as "full" in the trend — a
+    # stopped run's row said `full` while 66 cases were unrun and the report
+    # needed a hand-written correction.
+    pass_cell = pass_type
+    if pass_type == "full" and coverage is not None and coverage["missing"]:
+        pass_cell = f"full ({coverage['ran']}/{coverage['total']})"
     with open(rounds_md, "a") as fh:
-        fh.write(f"| {N} | {pass_type} | {blockers_open} | {majors_open} | "
+        fh.write(f"| {N} | {pass_cell} | {blockers_open} | {majors_open} | "
                  f"{minors_open} | {proposals_open} | {closed} | {new} | "
                  f"{reopened} | {promoted} | {net:+d} | {round_tokens} | {decision} |\n")
 

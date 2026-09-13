@@ -80,10 +80,15 @@ implementer's inherit.)
   harness quirk you defeat (gesture workarounds — a toggle that needs a dwell
   instead of a tap, a slider that needs swipe — screenshot scale factors,
   timing quirks). The next dispatch should never rediscover what you learned.
-  Chunk-specific notes go under a `## Chunk <slug>` heading — rotation
-  archives those at loop end; only durable, environment-general recipes
-  belong in the general sections (the file has a ~10KB ceiling and every
-  tester pays for every byte of it). Append at most ~15 lines per dispatch,
+  Chunk-specific notes go under a `## Chunk r<round>-<slug>` heading (the
+  round number matters: rotation archives chunk sections once their round
+  is BEHIND the current one, so your notes survive for this round's later
+  chunks but never outstay it); only durable, environment-general recipes
+  belong in the general sections (the file has a byte ceiling and every
+  tester pays for every byte of it). A general section heading may carry
+  `[pin]` when its loss would cost the next tester real turns (the
+  Environment section earns this) — pinned sections are never
+  auto-archived, so pin sparingly. Append at most ~15 lines per dispatch,
   and prefer EDITING an existing bullet over adding a new section — the
   file crossed its ceiling four times in one measured loop.
 - Before BUILDING any helper (image diff, cropping, save injection, screen
