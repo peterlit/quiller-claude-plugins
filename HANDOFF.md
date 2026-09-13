@@ -6,9 +6,12 @@ level (READMEs, CONTROLS.md, the SKILL.md files, and a rationale-dense git log).
 This file captures the *how we work* knowledge that previously lived only in
 the maintaining session's conversation history.
 
-State as of this writing: `review-loop-tools 0.9.0`, `qa-loop-tools 0.11.0`,
-`arch-docs-tools 0.1.0`, all committed and pushed to
-`github.com/peterlit/quiller-claude-plugins`, working tree clean.
+State as of this writing (updated 2026-09-13): `review-loop-tools 0.13.0`,
+`qa-loop-tools 0.14.0`, `arch-docs-tools 0.1.0`, all committed and pushed to
+`github.com/peterlit/quiller-claude-plugins`, working tree clean. The 0.13.0
+pair digested the 2026-09-09 field reports (two qa 0.12.0 runs + one review
+0.10.0 run — see `docs/inbox/` and `docs/proposal-2026-09-09-field-reports.md`);
+qa 0.14.0 shipped the driver contract + `ios-xcuitest` backend.
 
 ---
 
@@ -21,9 +24,11 @@ process is the most important thing to preserve:
   codebases: *agent 1* works in `~/Documents/src/weatherapp`, *agent 2* in
   `~/Documents/src/cardgame` (an app codenamed "Causeway"). They run the
   plugins for real, then write feedback memos and token-usage studies into
-  their own repos (`weatherapp/docs/reports/`, `cardgame/docs/`). **Those memos
-  are not in this repo** — Peter pastes or attaches them here. If you need the
-  raw history, those directories are the archive.
+  their own repos (`weatherapp/docs/reports/`, `cardgame/docs/`). Delivered
+  copies now land in this repo's `docs/inbox/` and get committed alongside the
+  proposal they produced (the field repos remain the raw archive — and they
+  are on this same Mac, so you can usually READ referenced material in place,
+  e.g. the Causeway driver source, instead of asking for a delivery).
 - **Cadence**: Peter delivers feedback → you digest it and write a numbered
   proposal (what you'd change, the mechanism, what you'd decline and why) →
   Peter approves (his approvals are terse: "go", "yes", "build it") → you
@@ -57,14 +62,20 @@ process is the most important thing to preserve:
    durable output name, add its negation to the template and update the
    stamp in the same release (the definition of "conclusion" stays versioned
    with the code that produces it).
-2. **Shared scripts are authored in `review-loop-tools/scripts/` and cp-synced
-   byte-identical to `qa-loop-tools/scripts/`**: `merge_ledger.py`,
-   `render_report.py`, `loop_guard.sh`, `subagent_guard.sh`, `read_guard.sh`,
-   `dispatch_stamp.sh`, `session_guard.sh`, `commit_guard.sh`. Never edit the
-   qa copy directly; after syncing, verify with `diff -q`. (`mutate.py`,
-   `hotspots.py`, `metrics.py` are review-only; `qa_metrics.py`,
-   `plan_round.py`, `nfr_*`, `provision_workers.sh`, `merge_coverage.py` are
-   qa-only.)
+2. **Shared scripts are authored in `review-loop-tools/scripts/` and mirrored
+   to `qa-loop-tools/scripts/`**: `merge_ledger.py`, `render_report.py`,
+   `loop_guard.sh`, `subagent_guard.sh`, `read_guard.sh`, `dispatch_stamp.sh`,
+   `session_guard.sh`, `commit_guard.sh`. CAVEAT (since 0.11.0's panel):
+   `merge_ledger.py`, `render_report.py`, and `subagent_guard.sh` are no
+   longer byte-identical — the review copies carry panel-only additions
+   (panel-tally, the Panel report section, the panel-namespace guard note).
+   The rule now: apply every shared change IDENTICALLY to both copies in the
+   common regions, and keep the divergence panel-only; `diff` between the
+   copies must show nothing but panel code. (Resolving this properly — port
+   the panel to qa or add per-plugin section filtering — is a standing
+   BACKLOG item.) `mutate.py`, `hotspots.py`, `metrics.py`, `panel_review.py`
+   are review-only; `qa_metrics.py`, `plan_round.py`, `nfr_*`,
+   `provision_workers.sh`, `merge_coverage.py` are qa-only.
 3. **`CONTROLS.md` at repo root is canonical** and is cp-synced into both loop
    plugins (shipped so `/…:controls` works in-session). Any time a knob, verb,
    or policy changes, update the root copy and re-sync both.
@@ -82,6 +93,18 @@ process is the most important thing to preserve:
    originating incident and numbers are followed better; field agents have
    explicitly cited them. Same for the READMEs' WATCH LIST guidance: lead with
    behavior changes, not internals.
+7. **Driver backends live in `qa-loop-tools/drivers/<backend>/`** (first:
+   `ios-xcuitest`). The platform-neutral verb contract is documented in
+   CONTROLS.md ("Driver backends") and in each backend's README; skill and
+   tester text speak only contract verbs. NEVER build inside the plugin
+   cache — the skill copies the backend to `.qa-loop/driver/` and builds
+   there (`dd/` cache, ignored by the allowlist). Nothing app-specific goes
+   into a backend; app quirks belong in the target repo's HARNESS_NOTES.md.
+8. **Keep THIS file current — in the same commit as the change.** Every
+   release updates the state line at the top; any change that touches a
+   ritual, a settled decision, the roadmap, or the watch items updates that
+   section too. Peter's standing instruction (2026-09-13): HANDOFF.md is
+   never allowed to go stale — it is the next maintainer's only inheritance.
 
 ## 3. Design decisions that look wrong but are settled
 
@@ -150,27 +173,38 @@ accounts**, so its remaining content is summarized here:
   persona; escalates to opus on any failure or uncertainty; 15% of its passes
   get an opus audit sample; auto-revert the whole tier if disagreement exceeds
   ~10%. Also: pin `regression-test-writer` to sonnet (mechanical, verifiable
-  work). **Prerequisite**: one measured qa-loop run on the current version to
-  establish the baseline.
-- **Tier 3 (parked)** — compiled XCUITest replays: machine-readable per-TC
-  step lists plus a replay runner, so re-verification is a compiled test run
-  instead of an agent driving the simulator. The `.qa-loop/tools/` persistence
-  convention is the stepping stone (agents already build ad-hoc drivers).
-  Only worth it at a steady testing cadence.
+  work). **Prerequisite SATISFIED (2026-09-09)**: agent 2's measured 40.1M
+  qa-loop run on 0.12.0 is the baseline, and the regression writer is now the
+  #2 cost center (7.2M for 49 tests). Needs its own numbered proposal next.
+- **Tier 3 (closer than it was)** — compiled XCUITest replays: per-TC step
+  lists plus a replay runner, so re-verification is a compiled test run
+  instead of an agent driving the simulator. The shipped `ios-xcuitest`
+  driver backend (0.14.0) IS the stepping stone HANDOFF used to name
+  hypothetically — its `qa.py --batch` mode already replays a command list.
+  Still only worth it at a steady testing cadence.
 - **Experiments deferred pending measurement**: a cheaper closeout verifier;
   a persistent reviewer reused across rounds via session resume (cache reads
   at 0.1× vs full re-reads each round).
 - **qa-loop has no closeout stage.** Port review's closeout only after the
   review closeout has a clean field record — it was the most failure-prone
-  area of the whole system.
+  area of the whole system. (First good record: the 2026-09-09 review run's
+  closeout fixed the remaining major and re-verified it; one more clean run
+  and the port is arguable.)
 - Pre-staged qa items from older feedback: a per-round accessibility-id index
   for testers; a single-command `qa-run.sh` orchestration wrapper.
 
-**Watch items for the next field reports**: closeout verify-targets/red-target
-enforcement holding; fix-reviewer rejection (unsound) rate; the new
-`consulted` / at-cap "raise max_rounds?" thrashing flow's first real exercise;
-HARNESS_NOTES actually staying under its 10KB ceiling; `token_budget` accuracy
-now that `set-usage` replaces.
+**Watch items for the next field reports** (post-0.13.0/0.14.0): the shipped
+driver building and serving on a field rig (first non-Causeway app); the
+Stage-0 grant probe catching an ungranted worker BEFORE wave 1; namespaced
+worker reuse actually preserving grants across loops; a `WF-<n><letter>`
+workflow chunking cleanly; the notes byte-ceiling holding (and whether 10KB
+default needs raising once driver recipes accumulate); `converged-in-closeout`
+appearing on a scoped run instead of a "thrashing" headline; archive's
+sync-conflict check firing (or staying quiet) on the iCloud repo;
+`arm-when-green` flake rate; the minors-only `full_pass_required` implementer
+dispatch not being abused for majors. Still standing from before:
+fix-reviewer rejection (unsound) rate; closeout verify-targets/red-target
+enforcement.
 
 ## 6. Environment notes (Peter's machine and habits)
 
