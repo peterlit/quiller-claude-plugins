@@ -26,6 +26,17 @@ on) unhashable severities; the .stat read tolerates invalid UTF-8;
 ollama_need is byte-aware and run_ollama re-checks prompt_eval_count;
 normalize_url strips trailing slashes; render_report tolerates a
 bare-string 'sources'.
+
+Round-2 additions: the codex lane end to end through a RELATIVE loop dir
+(a stub `codex` on PATH — the jail cwd must not swallow the
+--output-last-message file); run()/probe() survive a panel.json that is
+valid JSON but not an object; consent rc semantics (git rc!=1 inside a
+checkout fails CLOSED, untracked-vs-unknown distinguished); run_ollama
+refuses a prompt over the model's trained context (/api/show) before
+paying for generate, gives clamp-proof advice, and preserves the response
+on the truncation raise; punctuation-differing lane names no longer
+collide on one output base; codex/gemini env is scrubbed (no CLAUDE_*,
+pwd vars point at the jail).
 """
 import contextlib, hashlib, io, json, os, re, shlex, shutil, subprocess, sys
 import tempfile, time
@@ -479,6 +490,167 @@ def main():
                                 "sources": "panel:ollama"})[0]
         ok("via panel:ollama" in line and "p+a+n" not in line,
            "bare-string 'sources' renders as one lane tag, not characters")
+
+        # ================= round-2 panel hardening =======================
+
+        # --- codex lane END TO END through a RELATIVE loop dir: codex
+        # resolves --output-last-message against its jail cwd, so a
+        # relative _out_base vanishes with the jail (round-1 blocker) ---
+        croot = os.path.join(td, "codexroot")
+        cloop = os.path.join(croot, ".review-loop")
+        os.makedirs(os.path.join(cloop, "briefs"))
+        with open(os.path.join(cloop, "briefs", "round-0.stat"), "w") as fh:
+            fh.write("a.md | 1 +\n")
+        with open(os.path.join(cloop, "briefs", "round-0.diff"), "w") as fh:
+            fh.write("diff --git a/a.md b/a.md\n+x\n")
+        with open(os.path.join(cloop, "panel.json"), "w") as fh:
+            json.dump({"lanes": [{"name": "codex", "type": "codex"}]}, fh)
+        with open(os.path.join(cloop, "panel-consent.json"), "w") as fh:
+            json.dump({"remote_lanes_approved": True}, fh)
+        bindir = os.path.join(td, "bin")
+        os.makedirs(bindir, exist_ok=True)
+        stub = os.path.join(bindir, "codex")
+        with open(stub, "w") as fh:
+            fh.write(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "# Like real codex: the output path resolves against OUR cwd.\n"
+                "out = sys.argv[sys.argv.index('--output-last-message') + 1]\n"
+                "sys.stdin.read()\n"
+                "with open(out, 'w') as fh:\n"
+                "    fh.write('{\"findings\":[{\"claim\":\"stub\",'\n"
+                "             '\"evidence\":[\"a.md:1\"],\"severity\":\"minor\",'\n"
+                "             '\"confidence\":0.4}]}')\n"
+                "print('codex exec event-log noise, not JSON')\n")
+        os.chmod(stub, 0o755)
+        env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"])
+        r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "run", ".review-loop", "0"], cwd=croot, env=env)
+        lanes = {l["lane"]: l for l in json.loads(r.stdout)["lanes"]}
+        ok(r.returncode == 0 and lanes["codex"]["status"] == "ok"
+           and os.path.exists(os.path.join(cloop, "fragments", "panel",
+                                           "round-0-codex.candidates.json")),
+           "relative loop dir: codex output file survives the jail teardown")
+
+        # --- panel.json that is VALID JSON but not an object ---
+        lroot = os.path.join(td, "listpanel")
+        os.makedirs(os.path.join(lroot, ".review-loop", "briefs"))
+        with open(os.path.join(lroot, ".review-loop", "panel.json"), "w") as fh:
+            fh.write('[{"lanes": []}]')
+        r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "run", ".review-loop", "0"], cwd=lroot)
+        ok(r.returncode == 0 and "Traceback" not in r.stderr
+           and json.loads(r.stdout).get("status") == "panel-unreadable",
+           "run() reports non-object panel.json instead of AttributeError")
+        ok(pr.panel_lane_for([{"lanes": [1]}], "codex") is None
+           and pr.panel_lane_for({"lanes": "oops"}, "codex") is None,
+           "panel_lane_for tolerates non-dict panel and non-list lanes")
+        nroot = os.path.join(td, "probe-list")
+        os.makedirs(os.path.join(nroot, ".review-loop"))
+        with open(os.path.join(nroot, ".review-loop", "panel.json"), "w") as fh:
+            fh.write('["not", "an", "object"]')
+        cwd, buf = os.getcwd(), io.StringIO()
+        real_which, real_open = pr.shutil.which, pr.open_url
+        try:
+            pr.shutil.which = lambda n: None
+            pr.open_url = _no_daemon
+            os.chdir(nroot)
+            with contextlib.redirect_stdout(buf):
+                pr.probe([])
+        finally:
+            os.chdir(cwd)
+            pr.shutil.which, pr.open_url = real_which, real_open
+        ok(json.loads(buf.getvalue()).get("panel", "").startswith("unreadable"),
+           "probe reports non-object panel.json instead of crashing")
+
+        # --- consent rc semantics: git-can't-answer INSIDE a checkout is
+        # never read as 'untracked' (dubious ownership, corrupt index,
+        # missing git all fail CLOSED) ---
+        ok(pr.consent_git_status(os.path.join(gloop, "panel-consent.json"))
+           == "tracked", "consent_git_status: rc 0 is 'tracked'")
+        real_sub = pr.subprocess.run
+        try:
+            pr.subprocess.run = lambda *a, **kw: subprocess.CompletedProcess(
+                a, 128, b"", b"fatal: detected dubious ownership")
+            ok(pr.load_consent(gloop) == {},
+               "git rc=128 inside a checkout fails CLOSED (no consent)")
+            def _no_git(*a, **kw):
+                raise FileNotFoundError("git")
+            pr.subprocess.run = _no_git
+            ok(pr.load_consent(gloop) == {},
+               "git missing inside a checkout fails CLOSED (no consent)")
+        finally:
+            pr.subprocess.run = real_sub
+        ok(pr.in_git_worktree(os.path.join(gloop, "panel-consent.json"))
+           and not pr.in_git_worktree(os.path.join(td, "nowhere.json")),
+           "in_git_worktree: checkout detected, bare tempdir is not one")
+
+        # --- ollama: trained-context clamp refused BEFORE generate ---
+        calls = []
+        def fake_ollama(req, t):
+            url = req.full_url if hasattr(req, "full_url") else req
+            calls.append(url)
+            if url.endswith("/api/show"):
+                return FakeResp({"model_info": {"qwen3.context_length": 8192}})
+            return FakeResp({"response": "r", "prompt_eval_count": 100})
+        real_open_url = pr.open_url
+        try:
+            pr.open_url = fake_ollama
+            try:
+                # need ~35k: passes num_ctx_max, exceeds the 8k trained ctx.
+                pr.run_ollama({"num_ctx_max": 65536}, "x" * 100000, td, 5)
+                ok(False, "run_ollama should refuse a prompt over trained ctx")
+            except ValueError as e:
+                ok("trained context" in str(e)
+                   and not any(u.endswith("/api/generate") for u in calls),
+                   "need above /api/show trained context refused BEFORE generate")
+            obase = os.path.join(td, "olane")
+            pr.open_url = lambda req, t: FakeResp(
+                {"model_info": {}, "response": "paid-for",
+                 "prompt_eval_count": 999999})
+            try:
+                pr.run_ollama({"num_ctx_max": 65536, "_out_base": obase},
+                              "x" * 1000, td, 5)
+                ok(False, "context-filling prompt_eval_count should raise")
+            except ValueError as e:
+                ok("max_diff_tokens" in str(e)
+                   and "raise num_ctx_max" not in str(e),
+                   "truncation advice names max_diff_tokens, not num_ctx_max")
+                ok(open(obase + ".raw.txt").read() == "paid-for",
+                   "truncation raise still preserves the paid-for response")
+        finally:
+            pr.open_url = real_open_url
+
+        # --- lane names differing only in punctuation no longer collide ---
+        ok(pr.safe_lane_name("codex") == "codex"
+           and pr.safe_lane_name("gemini") == "gemini",
+           "clean lane names keep byte-identical artifact paths")
+        ok(pr.safe_lane_name("gemini-2.5-pro") != pr.safe_lane_name("gemini-2_5-pro"),
+           "punctuation-differing lane names get distinct output bases")
+        ok(pr.safe_lane_name("x" * 64 + "a") != pr.safe_lane_name("x" * 64 + "b"),
+           "names sharing the first 64 safe chars get distinct output bases")
+        ok(re.fullmatch(r"[A-Za-z0-9_-]+", pr.safe_lane_name("../../x")),
+           "disambiguated names stay filesystem-safe (no dots or separators)")
+
+        # --- codex/gemini env scrubbed: repo pointers don't enter the jail ---
+        os.environ["CLAUDE_SELFTEST_LEAK"] = "/real/repo"
+        real_sub = pr.subprocess.run
+        try:
+            pr.subprocess.run = fake_sub_run
+            cap.clear()
+            pr.run_codex({"_out_base": os.path.join(td, "lane2")}, "p", td, 5)
+            ok("CLAUDE_SELFTEST_LEAK" not in cap["env"]
+               and cap["env"]["PWD"] == cap["cwd"]
+               and cap["env"]["OLDPWD"] == cap["cwd"],
+               "codex env scrubbed: no CLAUDE_*, pwd vars point at the jail")
+            cap.clear()
+            pr.run_gemini({}, "p", td, 5)
+            ok("CLAUDE_SELFTEST_LEAK" not in cap["env"]
+               and cap["env"].get("GEMINI_CLI_TRUST_WORKSPACE") == "true",
+               "gemini env scrubbed and still trusts the jail workspace")
+        finally:
+            pr.subprocess.run = real_sub
+            os.environ.pop("CLAUDE_SELFTEST_LEAK", None)
 
         # --- CONTROLS.md mirrors stay byte-identical (HANDOFF.md cp-sync) ---
         repo = os.path.abspath(os.path.join(HERE, "..", ".."))

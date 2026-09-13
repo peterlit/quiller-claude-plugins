@@ -99,32 +99,59 @@ def open_url(req, timeout):
         return opener.open(req, timeout=timeout)
     return urllib.request.urlopen(req, timeout=timeout)
 
-def consent_file_tracked(path):
+def consent_git_status(path):
     """A consent file that TRAVELS IN GIT is the exact attack load_consent
     exists to prevent — `git add -f` bypasses the .gitignore convention, so
-    ask git directly whether the file is tracked. No git / not a repo means
-    nothing could have tracked it into place."""
+    ask git directly whether the file is tracked. rc semantics matter: 0 is
+    tracked, 1 is untracked, and ANYTHING ELSE (128: dubious ownership in a
+    container/CI, corrupt index, not a repo; git missing; the timeout) means
+    git COULD NOT ANSWER — report 'unknown', never conflate it with
+    'untracked' or a force-committed consent is honored exactly in the
+    unattended environments where nobody is watching."""
     try:
         r = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(path)),
                             "ls-files", "--error-unmatch", os.path.basename(path)],
                            capture_output=True, timeout=10)
-        return r.returncode == 0
     except Exception:
-        return False
+        return "unknown"
+    return {0: "tracked", 1: "untracked"}.get(r.returncode, "unknown")
+
+def in_git_worktree(path):
+    """Filesystem-level 'is this inside a checkout': any .git (dir, or file
+    for worktrees/submodules) up the tree. Splits 'git could not answer'
+    into its two honest cases — no checkout anywhere means nothing could
+    have TRACKED the consent file into place (safe to honor), while a
+    checkout git refuses to read could be hiding a force-committed consent
+    (must fail closed)."""
+    d = os.path.dirname(os.path.abspath(path))
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return True
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
 
 def load_consent(loop):
     """Consent is per-checkout state, read ONLY from the untracked
     panel-consent.json — never from git-tracked panel.json, so a file that
     arrives with a clone cannot approve egress or shell execution. A
-    force-committed panel-consent.json is refused for the same reason, and
-    an unreadable one fails CLOSED (no consent), never with a traceback."""
+    force-committed panel-consent.json is refused for the same reason; an
+    unreadable one, or one whose tracked-ness git CANNOT CONFIRM inside a
+    checkout, fails CLOSED (no consent), never with a traceback."""
     path = os.path.join(loop, "panel-consent.json")
     if not os.path.exists(path):
         return {}
-    if consent_file_tracked(path):
+    status = consent_git_status(path)
+    if status == "tracked":
         print("panel_review: panel-consent.json is TRACKED in git — consent "
               "must be per-checkout; ignoring it (git rm --cached it, then "
               "re-consent locally)", file=sys.stderr)
+        return {}
+    if status == "unknown" and in_git_worktree(path):
+        print("panel_review: cannot verify panel-consent.json is untracked "
+              "(git could not answer inside this checkout) — failing CLOSED, "
+              "no consent", file=sys.stderr)
         return {}
     try:
         c = load_json(path, {})
@@ -153,9 +180,11 @@ def panel_lane_for(panel, kind):
     """The configured lane of this type from panel.json, if any — the smoke
     must exercise the lane AS CONFIGURED (its model above all: a model the
     account cannot access is the top misconfiguration, and smoking the CLI's
-    default model would green-light it at the setup gate)."""
-    for lane in (panel or {}).get("lanes", []):
-        if lane.get("type", lane.get("name")) == kind:
+    default model would green-light it at the setup gate). Tolerates a
+    non-dict panel — a merge-mangled panel.json can be a list or string."""
+    lanes = panel.get("lanes") if isinstance(panel, dict) else None
+    for lane in lanes if isinstance(lanes, list) else []:
+        if isinstance(lane, dict) and lane.get("type", lane.get("name")) == kind:
             return lane
     return None
 
@@ -193,6 +222,12 @@ def probe(args):
         # into a traceback: report it and probe lane availability anyway.
         panel = None
         out["panel"] = "unreadable ({}): {}".format(panel_path, e)
+    if panel is not None and not isinstance(panel, dict):
+        # Valid JSON that is not an OBJECT (a merge-mangled list, a bare
+        # string) is exactly as unreadable as a syntax error downstream.
+        out["panel"] = "unreadable ({}): not a JSON object (got {})".format(
+            panel_path, type(panel).__name__)
+        panel = None
 
     codex = shutil.which("codex")
     if not codex:
@@ -341,8 +376,23 @@ def sanitize(obj, lane):
             "overflow_dropped": max(0, len(keep) - CAP),
             "findings": keep[:CAP]}
 
+def jail_env(jail):
+    """The jail hides the repo from the CLI's file tools, but the inherited
+    env still NAMES it (PWD/OLDPWD, the calling agent's CLAUDE_* vars) — and
+    a prompt-injected absolute-path read only needs the name. Point the pwd
+    vars at the jail and drop the CLAUDE_* namespace; auth material (HOME,
+    API keys, credential paths) stays so the lane can still log in."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    env["PWD"] = env["OLDPWD"] = jail
+    return env
+
 def run_codex(lane, prompt, repo, timeout):
-    out_file = lane["_out_base"] + ".last-message.txt"
+    # ABSOLUTE, because codex resolves this path against ITS cwd — the empty
+    # jail below, torn down on exit. run() takes the loop dir straight from
+    # argv (documented form: `run .review-loop <n>`), so a relative
+    # _out_base would be written inside the jail, vanish with it, and every
+    # codex lane would silently fall back to parsing stdout event noise.
+    out_file = os.path.abspath(lane["_out_base"] + ".last-message.txt")
     # A leftover output file from a prior interrupted run must never be read
     # as THIS run's result if codex exits 0 without rewriting it.
     with contextlib.suppress(FileNotFoundError):
@@ -358,7 +408,7 @@ def run_codex(lane, prompt, repo, timeout):
     # the repo as the discoverable default, not every conceivable read.)
     with tempfile.TemporaryDirectory(prefix="panel-lane-") as jail:
         r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                           timeout=timeout, cwd=jail)
+                           timeout=timeout, cwd=jail, env=jail_env(jail))
     if os.path.exists(out_file):
         with open(out_file, encoding="utf-8") as fh:
             return fh.read(), r
@@ -373,8 +423,8 @@ def run_gemini(lane, prompt, repo, timeout):
     # we feed it — it needs no workspace tool access — so the "trusted
     # workspace" is an EMPTY scratch dir, never the repo: diff-only means
     # the CLI's own file tools have nothing to read even under injection.
-    env = dict(os.environ, GEMINI_CLI_TRUST_WORKSPACE="true")
     with tempfile.TemporaryDirectory(prefix="panel-lane-") as jail:
+        env = dict(jail_env(jail), GEMINI_CLI_TRUST_WORKSPACE="true")
         r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
                            timeout=timeout, cwd=jail, env=env)
     return r.stdout, r
@@ -386,6 +436,26 @@ def ollama_need(prompt):
     server's reported prompt_eval_count after the call and fails loudly."""
     return int(max(len(prompt), len(prompt.encode("utf-8")))
                / CHARS_PER_TOKEN * 1.25) + 4096
+
+def ollama_model_ctx(model, timeout=10):
+    """The model's trained context from /api/show. Modern ollama silently
+    CLAMPS a requested num_ctx down to this, so a num_ctx sized from the
+    prompt can be granted as something far smaller — the post-call
+    prompt_eval_count re-check would then measure against the wrong ceiling
+    and pass real truncation. None when the server cannot say."""
+    try:
+        body = json.dumps({"model": model}).encode()
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/show", data=body,
+                                     headers={"Content-Type": "application/json"})
+        with open_url(req, timeout) as resp:
+            info = json.load(resp).get("model_info") or {}
+        for k, v in info.items():
+            # Arch-prefixed key: llama.context_length, qwen3.context_length…
+            if k.endswith(".context_length") and isinstance(v, int):
+                return v
+    except Exception:
+        pass
+    return None
 
 def run_ollama(lane, prompt, repo, timeout):
     # num_ctx must cover the whole prompt: ollama's default context is far
@@ -399,7 +469,18 @@ def run_ollama(lane, prompt, repo, timeout):
         raise ValueError(
             f"prompt needs num_ctx ~{need} but num_ctx_max is {num_ctx_max}; "
             f"lower the lane's max_diff_tokens or raise num_ctx_max")
-    body = json.dumps({"model": lane.get("model", "qwen3-coder:30b"),
+    model = lane.get("model", "qwen3-coder:30b")
+    # ollama silently CLAMPS num_ctx to the model's trained context — asking
+    # for 40k on an 8k model truncates the prompt while prompt_eval_count
+    # lands near 8k, far below `need`, so only a pre-call refusal against
+    # the trained context catches it.
+    model_ctx = ollama_model_ctx(model)
+    if model_ctx and need > model_ctx:
+        raise ValueError(
+            f"prompt needs num_ctx ~{need} but {model}'s trained context is "
+            f"{model_ctx} — ollama would silently clamp and truncate; lower "
+            f"the lane's max_diff_tokens or use a larger-context model")
+    body = json.dumps({"model": model,
                        "prompt": prompt, "stream": False,
                        "format": "json",
                        "options": {"num_ctx": need}}).encode()
@@ -413,10 +494,17 @@ def run_ollama(lane, prompt, repo, timeout):
     # response) — the silent failure the pre-check exists to prevent.
     pe = data.get("prompt_eval_count")
     if isinstance(pe, int) and pe >= need - 1024:
+        # Keep the already-paid-for response for debugging even though the
+        # lane fails (run_lane never reaches its own .raw.txt write).
+        if lane.get("_out_base"):
+            with open(lane["_out_base"] + ".raw.txt", "w",
+                      encoding="utf-8") as fh:
+                fh.write(data.get("response", "") or "")
         raise ValueError(
             f"ollama consumed {pe} prompt tokens of num_ctx {need} — the "
             f"context estimate undershot and the prompt was likely truncated; "
-            f"raise num_ctx_max or lower max_diff_tokens")
+            f"lower the lane's max_diff_tokens (need derives from the prompt, "
+            f"so a bigger num_ctx_max cannot help)")
     return data.get("response", ""), None
 
 def run_cmd(lane, prompt, repo, timeout):
@@ -447,8 +535,17 @@ def safe_lane_name(name):
     """Lane names come from git-tracked panel.json and are spliced into
     output paths: a pulled-in name like '../../x' must not write outside
     fragments/panel/. Filesystem-safe charset only (no dots — '..' survives
-    a dot-permitting charset); display strings keep the raw name."""
-    return re.sub(r"[^A-Za-z0-9_-]", "_", str(name or "lane"))[:64] or "lane"
+    a dot-permitting charset); display strings keep the raw name. When
+    sanitizing CHANGED the name, append a digest of the raw one: otherwise
+    'gemini-2.5-pro' and 'gemini-2_5-pro' (or two names sharing the first
+    64 safe chars) collide on one output base and the concurrent lanes
+    silently overwrite each other's candidates. Today's clean names
+    ('codex', 'gemini') stay byte-identical."""
+    raw = str(name or "lane")
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", raw)[:64] or "lane"
+    if safe != raw:
+        safe += "-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return safe
 
 def run_lane(lane, loop, rnd, repo, consent):
     name, kind = lane.get("name"), lane.get("type", lane.get("name"))
@@ -522,7 +619,15 @@ def run(args):
         print(json.dumps({"status": "panel-unreadable",
                           "note": f"panel.json: {e}"[:200]}))
         return
-    if not panel or not panel.get("lanes"):
+    if panel is not None and not isinstance(panel, dict):
+        # Valid JSON but not an object (merge-mangled list, bare string):
+        # same round-time grace as a syntax error, never an AttributeError.
+        print(json.dumps({"status": "panel-unreadable",
+                          "note": "panel.json: valid JSON but not an object "
+                                  f"(got {type(panel).__name__})"}))
+        return
+    if not panel or not isinstance(panel.get("lanes"), list) \
+            or not panel["lanes"]:
         print(json.dumps({"status": "no-panel", "note": "no panel.json or no lanes"}))
         return
     repo = os.path.dirname(os.path.abspath(loop))
