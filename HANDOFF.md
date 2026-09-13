@@ -192,6 +192,13 @@ accounts**, so its remaining content is summarized here:
   and the port is arguable.)
 - Pre-staged qa items from older feedback: a per-round accessibility-id index
   for testers; a single-command `qa-run.sh` orchestration wrapper.
+- **Proposed 2026-09-13, awaiting approval — agent feedback process**
+  (`docs/proposal-agent-feedback-process.md`): the loops write an objective
+  run summary at report time, a `/<plugin>:feedback` skill files a
+  structured, ID-stamped bundle into an XDG drop the maintainer ingests with
+  a script, and a shipped per-plugin `FIELD-QUESTIONS.md` carries the watch
+  items and settled decisions to the field. If approved, the watch list
+  below moves into that file and this section keeps only a pointer.
 
 **Watch items for the next field reports** (post-0.13.0/0.14.0): the shipped
 driver building and serving on a field rig (first non-Causeway app); the
