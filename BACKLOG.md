@@ -1,5 +1,21 @@
 # Backlog
 
+## From the 2026-09-09 field reports (shipped as review 0.13.0 / qa 0.13.0+0.14.0)
+
+- **Symbol/hunk-level diff→workflow mapping** (agent 2 qa #7, deferred as
+  design-sized). `plan_round.py`'s `paths()` mapping is file-prefix-based, so
+  an app with few large view files maps most workflows to every diff and
+  every targeted pass degenerates to findings+smoke. Sketch: map changed
+  HUNKS to enclosing symbols (`git diff -W` or ctags), let `paths(WF-n)`
+  optionally name symbols (`Shared/Cart.swift#CartModel`), intersect at
+  symbol level, keep file-prefix as fallback. `--allow-wide` and the A9 perf
+  gating recover most of the waste meanwhile; build this only if targeted
+  passes still degenerate routinely after 0.13.0.
+- **Tier 2 (sonnet ux-verifier + sonnet regression writer)** — prerequisite
+  now satisfied: agent 2's measured 40.1M-effective 0.12.0 run is the
+  baseline (HANDOFF §5 wanted one before building). The regression writer is
+  now the #2 cost center (7.2M for 49 tests). Needs its own proposal.
+
 ## From review loop 2026-09-12/13 (REVIEW.md seed — panel hardening, v0.12.0)
 
 - **XDG consent store can still be relocated INTO the checkout by an absolute path** (`security/panel_review.py:consent-xdg-inside-checkout`, MAJOR, **FIXED post-closeout**). `consent_path()` now rejects an `XDG_CONFIG_HOME` whose realpath lies inside the reviewed repo (`dirname(realpath(loop))` — no git dependence), falling back to `~/.config` with a stderr warning; realpath on both sides catches symlink aliases. Selftest fixtures moved the hermetic XDG override to a sibling tempdir, plus attack-shaped checks: bundle shipping a pre-armed `.config/…/consent/<hash>.json` inside the checkout fails closed end to end, and a symlinked-into-repo base is rejected. Honest residual: repo-shipped env can still point the base at an attacker-controlled path *outside* the repo, but that requires the attacker to already control another location on the machine — outside the "repo carries the payload" threat model this store closes. Follow-up pass also closed the sibling vector through the `~/.config` **fallback** (repo-shipped `HOME` — demonstrated live): the fallback base gets the same containment check, and with nowhere trustworthy left `consent_path()` returns None → hard fail-closed, warning names HOME, consent-path verb refuses with a fix hint. Same pass: `remote_lanes_approved` grants only as JSON `true` (truthy non-booleans warn and gate closed), and the repo's own tracked legacy `.review-loop/panel-consent.json` was removed. Remaining hardening idea (backlog-grade, not built): the containment comparison is lexical `commonpath` — case-insensitive/Unicode-normalizing filesystems (APFS) could beat it with a case-twiddled base path; robust fix is an inode walk (`st_dev`/`st_ino` from the base's deepest existing ancestor vs the repo root).
