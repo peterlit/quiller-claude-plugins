@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render the deterministic sections of a loop's REPORT.md from its state files.
 
-Usage: render_report.py <loop-dir> [--out <path>]
+Usage: render_report.py <loop-dir> [--out <path>] [--stop-note "<how it ended>"]
 Reads ledger.json, rounds.md, verdict.json, coverage.json (qa), and any
 fragments/round-*-closeout.json. Writes <loop-dir>/REPORT.md (or --out).
 
@@ -63,6 +63,12 @@ def main():
     out_path = os.path.join(loop, "REPORT.md")
     if "--out" in sys.argv:
         out_path = sys.argv[sys.argv.index("--out") + 1]
+    # --stop-note: how the run actually ended when the verdict can't say it
+    # ("user abort during round 4's confirmation pass") — two field runs
+    # hand-edited the rendered report for exactly this.
+    stop_note = (sys.argv[sys.argv.index("--stop-note") + 1]
+                 if "--stop-note" in sys.argv
+                 and sys.argv.index("--stop-note") + 1 < len(sys.argv) else "")
     ledger = load(os.path.join(loop, "ledger.json"))
     if ledger is None:
         print(f"render_report: no ledger.json in {loop}", file=sys.stderr)
@@ -74,11 +80,30 @@ def main():
     L = []
 
     L.append(f"# Loop report — {os.path.basename(os.path.abspath(loop))}\n")
+    # A stop that ended green deserves a green headline: when the loop
+    # stopped thrashing_soft or at the backstop but a closeout ran and left
+    # 0 open blockers/majors, the honest label is converged-in-closeout —
+    # a measured run that ended with three minors headlined "thrashing".
+    # The original stop stays in rounds.md and in the parenthetical.
+    closeout_ran = bool(glob.glob(os.path.join(loop, "fragments",
+                                               "round-*-closeout.json")))
+    open_bm = sum(1 for f in findings
+                  if f.get("current_status") in OPENISH
+                  and f.get("routing", "auto") != "proposal"
+                  and f.get("severity") in ("blocker", "major"))
     if verdict:
-        L.append(f"**Stop condition:** `{verdict.get('decision')}` after round "
-                 f"{verdict.get('round')} — {verdict.get('reason')}\n")
+        if (closeout_ran and open_bm == 0
+                and verdict.get("decision") in ("thrashing_soft", "backstop")):
+            L.append(f"**Stop condition:** `converged-in-closeout` — stopped "
+                     f"`{verdict.get('decision')}` after round {verdict.get('round')} "
+                     f"({verdict.get('reason')}); closeout left 0 blockers/majors open\n")
+        else:
+            L.append(f"**Stop condition:** `{verdict.get('decision')}` after round "
+                     f"{verdict.get('round')} — {verdict.get('reason')}\n")
     else:
         L.append("**Stop condition:** unknown (no verdict.json — metrics never ran?)\n")
+    if stop_note:
+        L.append(f"**How the run actually ended:** {stop_note}\n")
     usage = ledger.get("usage") or {}
     if usage:
         tot = sum(sum(v.values()) for v in usage.values())
@@ -259,7 +284,9 @@ def main():
             why.append("introduced by a fix")
         if "FIX REJECTED" in (f.get("note") or ""):
             why.append("a fix was rejected")
-        if f.get("routing") == "proposal":
+        # Only a proposal still OPEN awaits a decision — one resolved as a
+        # duplicate (wontfix) kept landing on the watch list in the field.
+        if f.get("routing") == "proposal" and f.get("current_status") in OPENISH:
             why.append("proposal awaiting decision")
         if why:
             cands.append((f.get("id"), ", ".join(why)))

@@ -63,8 +63,19 @@ After making changes:
   manifest to `.review-loop/briefs/round-<N>-mutants.json` —
   `{"test_cmd": "...", "mutants": [{"id", "file", "original", "replacement",
   "line"(optional), "expect": "killed|survived"}]}` — and name it in CHANGES
-  as "mutations". The reviewer re-runs it in an isolated worktree; "8/8
-  killed" without a manifest is treated as an unverified claim.
+  as "mutations". `"replacement": ""` is valid and deletes the matched line.
+  The reviewer re-runs it in an isolated worktree; "8/8 killed" without a
+  manifest is treated as an unverified claim.
+- RUN `mutate.py` on your own manifest before returning — a manifest that
+  cannot run is an unfinished deliverable, and the reviewer will bounce it
+  (measured: a round-1 manifest shipped a literal `<scratch>` placeholder in
+  test_cmd and an empty replacement the old validator rejected; the round-2
+  implementer self-ran unprompted and its manifest was clean). test_cmd must
+  be a real command — no placeholders.
+- Long runs vs the 10-minute command ceiling: you MAY split a big manifest
+  into scratch copies for your own pre-flight — but say so in CHANGES, and
+  leave the named manifest INTACT and runnable as one file (the reviewer
+  runs it verbatim). Never background the run.
 - Stage by EXPLICIT FILE PATH — never `git add -A`/`--all`, `git add .`,
   `git add -f`, or a directory add touching `.review-loop/` (a hook blocks
   these during the loop; the loop-dir `.gitignore` allowlist decides what

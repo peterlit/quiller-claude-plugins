@@ -89,15 +89,23 @@ def promotions(findings, r):
 
 def converging_series(findings, r):
     """Every open finding is a regression the loop itself introduced, the
-    worst open severity is non-increasing over three rounds, and nothing
-    reopened: that is residue shrinking by construction, not churn."""
+    worst open severity is non-increasing over the rounds that EXIST (up to
+    three, minimum two), and nothing reopened: that is residue shrinking by
+    construction, not churn. The window adapts to short runs on purpose — a
+    hard three-round requirement meant a max_rounds=2 scoped run could never
+    qualify (measured: a converging 2-round run — net 0 then -2, all open
+    findings introduced_by_fix, severity major->major->minor in closeout —
+    ended thrashing_soft and headlined "thrashing" in the report)."""
     open_now = [f for f in findings if status_at(f, r) in OPENISH]
     if not open_now or not all(f.get("introduced_by_fix") for f in open_now):
         return False
-    if not (max_open_severity(findings, r) <= max_open_severity(findings, r - 1)
-            <= max_open_severity(findings, r - 2)):
+    window = [rr for rr in (r - 2, r - 1, r) if rr >= 1]
+    if len(window) < 2:
         return False
-    return net_for(findings, r)[2] == 0 and net_for(findings, r - 1)[2] == 0
+    sevs = [max_open_severity(findings, rr) for rr in window]
+    if any(earlier < later for earlier, later in zip(sevs, sevs[1:])):
+        return False
+    return all(net_for(findings, rr)[2] == 0 for rr in window[-2:])
 
 def main():
     if len(sys.argv) < 3:
@@ -148,12 +156,23 @@ def main():
     budget = ledger.get("token_budget")
     over_budget = bool(budget) and cumulative_tokens >= int(budget)
 
+    # The CONVERGING SERIES exemption guards the WHOLE churn signal, not just
+    # region churn: a measured 2-round scoped run tripped the net<=0-for-two-
+    # rounds branch (net -2 then 0, every open finding introduced_by_fix,
+    # nothing reopened) and headlined "thrashing" about a run that ended
+    # green — the exemption existed but was only consulted for region_thrash.
+    thrash_signal = (any_reopened_twice
+                     or (net_prev is not None and net <= 0 and net_prev <= 0)
+                     or region_thrash)
+    if thrash_signal and converging_series(findings, N):
+        thrash_signal = False
+
     # decision, in priority order
     if blockers_open == 0 and majors_open == 0 and not new_blocker_major:
         decision, reason = "converged", "no open blockers or majors; none newly introduced"
     elif over_budget:
         decision, reason = "budget", f"cumulative {cumulative_tokens} tokens >= token_budget {budget}; stop, closeout, report"
-    elif any_reopened_twice or (net_prev is not None and net <= 0 and net_prev <= 0) or region_thrash:
+    elif thrash_signal:
         consulted_at = ledger.get("thrashing_consulted")
         if blockers_open == 0 and closed > 0 and not consulted_at:
             if N >= max_rounds:

@@ -236,7 +236,10 @@ def _usage(args, verb, accumulate):
         fh.write("\n")
     total = sum(sum(v.values()) for v in ledger["usage"].values())
     if not getattr(set_usage, "quiet", False):
-        print(json.dumps({"round": int(rnd), "role": role, "round_tokens": sum(bucket.values()),
+        # round_total_tokens: the ROUND's sum across roles, not this call's
+        # figure (the old name "round_tokens" read as per-role next to a
+        # per-role call and got misread in the field).
+        print(json.dumps({"round": int(rnd), "role": role, "round_total_tokens": sum(bucket.values()),
                           "cumulative": total, "token_budget": ledger.get("token_budget")}))
 
 def set_usage(args):
@@ -246,14 +249,33 @@ def add_usage(args):
     _usage(args, "add-usage", accumulate=True)
 
 def notes_rotate(args):
-    """Rotate HARNESS_NOTES.md: chunk/round sections move to the archive,
-    general sections stay. Measured: the file regrew 6.9KB -> 22KB in one
-    round; at 86KB it cost ~21K tokens per dispatch and misled testers."""
+    """Rotate HARNESS_NOTES.md. Pass 1: prior-round chunk sections move to the
+    archive (a section headed `## Chunk r<N>-<slug>` survives while its round
+    is current — fresh chunk notes were archived before the next chunk could
+    read them in the field). Pass 2 (over-ceiling): archive general sections
+    OLDEST-FIRST (top-down after the preamble); a heading carrying [pin] is
+    never auto-archived, and neither is the preamble. Largest-first archived
+    the freshly written Environment section three times in one measured run.
+    All sizes are BYTES: a char-count compare against a byte ceiling left an
+    emoji-heavy 10.2-12.1KB file reporting over_ceiling with 0 rotated.
+    Ceiling: QA_NOTES_CEILING_KB env, default 10 (driver-era rigs need more).
+    Measured origin: the file regrew 6.9KB -> 22KB in one round; at 86KB it
+    cost ~21K tokens per dispatch and misled testers."""
     import datetime
     if len(args) < 1:
-        print("usage: merge_ledger.py notes-rotate <loop-dir>", file=sys.stderr)
+        print("usage: merge_ledger.py notes-rotate <loop-dir> [--round N]", file=sys.stderr)
         sys.exit(2)
     loop = args[0]
+    cur_round = None
+    rest = list(args[1:])
+    while rest:
+        a = rest.pop(0)
+        if a == "--round" and rest:
+            try:
+                cur_round = int(rest.pop(0))
+            except ValueError:
+                print("merge_ledger: --round must be an integer", file=sys.stderr)
+                sys.exit(1)
     p = os.path.join(loop, "HARNESS_NOTES.md")
     if not os.path.exists(p):
         print(json.dumps({"rotated_sections": 0, "kept_bytes": 0}))
@@ -261,30 +283,52 @@ def notes_rotate(args):
     import re as _re
     with open(p, encoding="utf-8") as fh:
         text = fh.read()
+
+    def bsize(s):
+        return len(s.encode("utf-8"))
+
     parts = _re.split(r"(?m)^(?=## )", text)
     keep, drop = [], []
     for i, sec in enumerate(parts):
         head = sec.splitlines()[0] if sec else ""
-        if i > 0 and _re.search(r"(?i)\b(round|chunk|wave|dispatch)\b|round-\d", head):
+        if i == 0:
+            keep.append(sec)
+            continue
+        m = _re.search(r"(?i)\bchunk\s+r(\d+)\b", head)
+        if m and cur_round is not None:
+            # Round-stamped chunk section: rotates only once its round is
+            # BEHIND the current one, so rotate-before-every-batch is safe.
+            (drop if int(m.group(1)) < cur_round else keep).append(sec)
+        elif _re.search(r"(?i)\b(round|chunk|wave|dispatch)\b|round-\d", head):
             drop.append(sec)
         else:
             keep.append(sec)
-    # Second pass: heading rotation alone could not get under the ceiling in
-    # the field (growth was in general sections) — archive the LARGEST
-    # remaining sections (preamble kept) until under 10KB.
-    CEIL = 10240
-    second = []
-    if sum(len(k) for k in keep) > CEIL and len(keep) > 1:
+    try:
+        CEIL = int(os.environ.get("QA_NOTES_CEILING_KB") or 10) * 1024
+    except ValueError:
+        print("merge_ledger: QA_NOTES_CEILING_KB must be an integer; using 10",
+              file=sys.stderr)
+        CEIL = 10240
+    second, pinned_kept = [], 0
+    if sum(bsize(k) for k in keep) > CEIL and len(keep) > 1:
         pre, secs = keep[0], keep[1:]
-        order = sorted(range(len(secs)), key=lambda i: -len(secs[i]))
         keep_flag = [True] * len(secs)
-        cur = len(pre) + sum(len(s) for s in secs)
-        for i in order:
+        cur = bsize(pre) + sum(bsize(s) for s in secs)
+        for i, s in enumerate(secs):
             if cur <= CEIL:
                 break
+            head = (s.splitlines()[0] if s else "").lower()
+            # [pin] sections and CURRENT-round chunk sections are off-limits
+            # here too — pass 1 kept the latter so the next chunk can read
+            # them; evicting them for size defeats that.
+            mm = _re.search(r"\bchunk\s+r(\d+)\b", head)
+            if "[pin]" in head or (mm and cur_round is not None
+                                   and int(mm.group(1)) >= cur_round):
+                pinned_kept += 1
+                continue
             keep_flag[i] = False
-            cur -= len(secs[i])
-            second.append(secs[i])
+            cur -= bsize(s)
+            second.append(s)
         keep = [pre] + [s for f, s in zip(keep_flag, secs) if f]
     if drop or second:
         os.makedirs(os.path.join(loop, "archive"), exist_ok=True)
@@ -295,6 +339,7 @@ def notes_rotate(args):
             fh.write("".join(keep))
     size = os.path.getsize(p)
     print(json.dumps({"rotated_sections": len(drop), "ceiling_sections": len(second),
+                      "pinned_kept": pinned_kept, "ceiling_bytes": CEIL,
                       "kept_bytes": size, "over_ceiling": size > CEIL}))
 
 def write_diff(args):
@@ -376,6 +421,25 @@ def next_round(args):
         out["decision"], out["reason"] = verdict["decision"], verdict["reason"]
         out["open"] = {k: verdict[k] for k in ("blockers_open", "majors_open", "minors_open") if k in verdict}
         if verdict["decision"] != "continue":
+            # Unattended runs take the documented default at ask-the-human
+            # verdicts; with the env knob set, RECORD that in rounds.md so
+            # the report is self-explaining (a field run had to hand-write
+            # "the default was taken" into the WATCH LIST).
+            env_name = "QA_LOOP_UNATTENDED" if is_qa else "REVIEW_LOOP_UNATTENDED"
+            unattended = os.environ.get(env_name, "").strip().lower() in ("1", "true", "yes")
+            if unattended and verdict["decision"] == "thrashing_soft":
+                default = ("abort + report" if is_qa else "abort + closeout + report")
+                line = (f"> round {rnd}: {env_name} set — unattended default "
+                        f"taken at `thrashing_soft`: {default}\n")
+                rmd = os.path.join(loop, "rounds.md")
+                prior = ""
+                if os.path.exists(rmd):
+                    with open(rmd, encoding="utf-8") as fh:
+                        prior = fh.read()
+                if line not in prior:
+                    with open(rmd, "a", encoding="utf-8") as fh:
+                        fh.write(line)
+                out["unattended_default"] = default
             print(json.dumps(out)); return
     nxt = rnd + 1
     sha = opt["--sha"]
@@ -432,13 +496,64 @@ def archive(args):
             + (f"-{sha}" if sha else ""))
     dest = os.path.join(loop_dir, "archive", name)
     moved = []
+
+    import subprocess
+    hygiene = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "hygiene_check.sh")
+
+    def dup_report():
+        if not os.path.exists(hygiene):
+            return set()
+        h = subprocess.run(["bash", hygiene, loop_dir],
+                           capture_output=True, text=True)
+        return {l for l in h.stdout.splitlines() if "duplicate name" in l}
+
+    pre_dups = dup_report()
+
+    def move_file(src, dst):
+        # Per-FILE moves with a post-check: a directory `mv` under an
+        # iCloud/Dropbox-synced repo produced Finder-duplicate names
+        # ("ledger 2.json", "briefs 2/") that sat unnoticed for 3 hours —
+        # hygiene only ran at report time. os.replace is atomic on one
+        # volume; verify the source is gone and the destination exists.
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        try:
+            os.replace(src, dst)
+        except OSError:
+            shutil.move(src, dst)
+        if os.path.exists(src) or not os.path.exists(dst):
+            print(f"merge_ledger: archive move FAILED for {src} -> {dst}; "
+                  f"stopping before state splits", file=sys.stderr)
+            sys.exit(1)
+
+    def move_tree(src, dst):
+        if os.path.isfile(src):
+            move_file(src, dst)
+            return
+        for root, _dirs, files in os.walk(src):
+            rel = os.path.relpath(root, src)
+            for fn in files:
+                move_file(os.path.join(root, fn),
+                          os.path.join(dst, fn) if rel == "."
+                          else os.path.join(dst, rel, fn))
+        shutil.rmtree(src, ignore_errors=True)
+
     for item in ("ledger.json", "rounds.md", "REPORT.md", "coverage.json",
                  "verdict.json", "fragments", "briefs", ".phase"):
         src = os.path.join(loop_dir, item)
         if os.path.exists(src):
             os.makedirs(dest, exist_ok=True)
-            shutil.move(src, os.path.join(dest, item))
+            move_tree(src, os.path.join(dest, item))
             moved.append(item)
+    # Evidence rides with its loop: round numbering restarts, so a new
+    # loop's evidence/round-1/<slug>/ otherwise arrives pre-populated with
+    # the old loop's same-named files (measured: 35 and 1,117 stale files in
+    # two independent runs; testers burned turns discovering it). The
+    # evidence/ directory itself stays — only round contents move.
+    import glob as _glob
+    for ev in sorted(_glob.glob(os.path.join(loop_dir, "evidence", "round-*"))):
+        move_tree(ev, os.path.join(dest, "evidence", os.path.basename(ev)))
+        moved.append(f"evidence/{os.path.basename(ev)}")
     # Sweep unknown top-level FILES (legacy REPORT-*.md, stray fragments…)
     # into legacy/ — every loop run pays to `ls` whatever is left here.
     KEEP = {"WORKFLOWS.md", "TESTCASES.md", "HARNESS_NOTES.md", "BACKLOG.md",
@@ -453,13 +568,27 @@ def archive(args):
         if entry in KEEP or not os.path.isfile(src):
             continue
         os.makedirs(os.path.join(dest, "legacy"), exist_ok=True)
-        shutil.move(src, os.path.join(dest, "legacy", entry))
+        move_file(src, os.path.join(dest, "legacy", entry))
         moved.append(f"legacy/{entry}")
     if not moved:
         print(f"merge_ledger: nothing to archive in {loop_dir}",
               file=sys.stderr)
         sys.exit(1)
-    print(json.dumps({"archived_to": dest, "moved": moved}))
+    # Post-archive integrity: re-run the hygiene check NOW so a sync-conflict
+    # duplicate is caught at archive time, not at report time hours later.
+    # Only duplicates that APPEARED during this archive fail the call —
+    # pre-existing ones in old archives were already reported once.
+    dup_lines = sorted(dup_report() - pre_dups)
+    print(json.dumps({"archived_to": dest, "moved": moved,
+                      "duplicates_detected": len(dup_lines)}))
+    if dup_lines:
+        for l in dup_lines:
+            print(l, file=sys.stderr)
+        print("merge_ledger: SYNC-CONFLICT DUPLICATES detected right after "
+              "archive (iCloud/Dropbox repos do this during moves) — resolve "
+              "them now: when the plain name is missing, the duplicate IS the "
+              "real file; mv it back", file=sys.stderr)
+        sys.exit(1)
 
 def panel_tally(args):
     """Record a panel round's per-lane tallies (filed/confirmed/demoted/

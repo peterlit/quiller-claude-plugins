@@ -58,6 +58,12 @@ Review across these axes (adjust to the actual stack you find):
   `briefs/round-N.diff`. Read the stat first, then per-file hunks from the
   diff file (`grep -n '^diff --git'` for offsets). Never re-pull the whole
   diff with git; a single-file `git diff <range> -- <path>` is fine.
+- DIFF-FIRST, files on demand: adjudicate from the diff; open a source file
+  only to settle a specific suspicion. Before re-reading a window you have
+  already read, name to yourself what you expect it to show that you did
+  not extract the first time — a measured seed spent 1.25M effective on a
+  clean 3,173-line scope, dominated by re-reading the same 200-line windows
+  (8.2M cache-read tokens across 64 requests).
 - Tests: run the SCOPED command (the implementer's `verify_cmd`, or
   `-only-testing:` / `swift test --filter` for the touched classes) and
   filter the output: `2>&1 | grep -E 'error:|failed|Executed|passed'`. One
@@ -103,7 +109,11 @@ Mutation claims: manifest named in CHANGES → run `python3 <mutate.py> <manifes
 and judge from its output — and if the summary shows `errors > 0`, the kill
 count is UNVERIFIED: say so in the finding's note (a silent apply-error once
 let "8/8 killed" stand for a round). `null` → skip. Hotspot table given →
-start there.
+start there. If the whole manifest cannot finish inside the 10-minute
+command ceiling, split it into parts whose rows are VERBATIM copies and run
+each part in the foreground — never rewrite mutants, never background the
+run; the kill counts sum. (`"replacement": ""` is a valid mutant: it
+deletes the matched line.)
 
 Collateral-damage sweep: the CHANGES block lists touched_files. Grep the
 test tree for test classes referencing the types defined in those files and

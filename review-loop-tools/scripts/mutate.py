@@ -12,6 +12,7 @@ Manifest:
      "original": "a < b", "replacement": "a <= b",
      "line": 42,                     # optional: restrict the match to this line
      "expect": "killed"}             # or "survived" (e.g. an equivalent mutant)
+    # "replacement": "" is valid and DELETES the matched line.
   ]
 }
 
@@ -28,7 +29,10 @@ def die(msg, code=1):
     sys.exit(code)
 
 def apply(path, original, replacement, line):
-    """Apply one mutant. Returns (original_text, error)."""
+    """Apply one mutant. Returns (original_text, error). An EMPTY replacement
+    ("") deletes the whole line holding the match — the most natural mutant.
+    It used to be rejected as a missing field, and a field implementer's
+    manifest died on exactly that."""
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     if line:
@@ -37,13 +41,22 @@ def apply(path, original, replacement, line):
             return None, f"line {line} out of range"
         if original not in lines[line - 1]:
             return None, f"original text not found on line {line}"
-        lines[line - 1] = lines[line - 1].replace(original, replacement, 1)
+        if replacement == "":
+            del lines[line - 1]
+        else:
+            lines[line - 1] = lines[line - 1].replace(original, replacement, 1)
         new = "\n".join(lines)
     else:
         n = text.count(original)
         if n != 1:
             return None, f"original text occurs {n} times (need exactly 1; add 'line')"
-        new = text.replace(original, replacement, 1)
+        if replacement == "" and "\n" not in original:
+            lines = text.split("\n")
+            idx = next(i for i, l in enumerate(lines) if original in l)
+            del lines[idx]
+            new = "\n".join(lines)
+        else:
+            new = text.replace(original, replacement, 1)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(new)
     return text, ""
@@ -68,9 +81,14 @@ def main():
     config_errors = []
     for i, m in enumerate(manifest["mutants"]):
         mid = m.get("id", f"m{i + 1}")
-        for k in ("file", "original", "replacement"):
+        for k in ("file", "original"):
             if not m.get(k):
                 config_errors.append(f"{mid}: missing '{k}'")
+        # replacement must be PRESENT, but "" is valid: it deletes the
+        # matched line (missing and empty are different claims).
+        if not isinstance(m.get("replacement"), str):
+            config_errors.append(f"{mid}: missing 'replacement' (a string; "
+                                 f"\"\" is valid and means delete the matched line)")
         if m.get("expect", "killed") not in ("killed", "survived"):
             config_errors.append(f"{mid}: expect must be killed|survived")
         if "\n" in (m.get("original") or "") and m.get("line"):

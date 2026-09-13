@@ -52,9 +52,15 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   ceiling.
   Scale caveat: the harness-reported figure is WORKLOAD-DEPENDENT below
   billed effective cost — measured ~4× for code loops and ~11× for
-  simulator loops (the ratio grows with turns per dispatch). Budget on the
-  reported scale for your loop type. `set-usage` REPLACES a (round, role)
+  simulator loops (mid-range confirmations: 5.9× on a code loop whose
+  reviewers ran xcodebuild, 6.9× on a full simulator loop; the ratio grows
+  with turns per dispatch). Budget on the reported scale for your loop
+  type — the stop is a guardrail on runaway loops, NOT protection for a
+  real dollar spend. `set-usage` REPLACES a (round, role)
   figure — corrections never inflate the feed; `add-usage` accumulates.
+  CLOSEOUT shares the last round's number: record its usage with
+  `add-usage`, never `set-usage`/`next-round --usage` (replace semantics
+  would erase that round's figures).
   *In practice:* the qa gate now recommends a value (estimate × rounds
   +50%); accept it unless you have a reason not to.
 - **`HARNESS_NOTES.md` policy** `[qa]` — ~10KB ceiling, enforced: the
@@ -111,8 +117,12 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   `open <ledger> [auto|proposal|all|closeout] [--region WF-n]` extracts
   open/partial findings as a JSON brief (`closeout` = the closeout-eligible
   set; `--region` = only one workflow's findings, for tester chunks);
-  `archive <loop-dir> [name]` moves a finished run's state into
-  `archive/<name>/` so the next loop starts clean; `scope <ledger> <a..b>`
+  `archive <loop-dir> [name]` moves a finished run's state — including
+  `evidence/round-*`, so a new loop's restarted round numbering never
+  collides with stale screenshots — into `archive/<name>/` so the next
+  loop starts clean (moves are per-file with a post-check, and a
+  sync-conflict ` 2`-name appearing during the move fails loudly right
+  there instead of at report time — iCloud/Dropbox repos do this); `scope <ledger> <a..b>`
   records the change under review so the report's WATCH LIST leads with it;
   `diff <loop-dir> <N> <a..b> [pathspecs]` materializes the round diff once
   for subagents (the loop directory is always excluded — its state is never
@@ -298,6 +308,14 @@ when the CLIs exist.*
   exit 0 before any commit is allowed.
   *In practice:* point it at your fast unit suite; keep it under a minute or
   every round crawls.
+- **`REVIEW_LOOP_UNATTENDED`** / **`QA_LOOP_UNATTENDED`** `[both]` (default
+  off; set to `1`) — declares nobody is at the keyboard. At an
+  ask-the-human verdict (`thrashing_soft`) the orchestrator takes the
+  documented default either way; with the knob set, `next-round` RECORDS
+  the taken default in `rounds.md`, so the report explains itself instead
+  of needing a hand-written note (a field run hand-edited the WATCH LIST
+  for exactly this).
+  *In practice:* set it whenever you walk away from a running loop.
 
 ## During a run
 
@@ -322,9 +340,13 @@ when the CLIs exist.*
   *In practice:* say "one more round" when the open findings are cheap and
   the trend is genuinely converging; take the abort when findings are
   reopening. Unattended runs don't wait: the default is abort-with-report,
-  then closeout. A converging series (every open finding introduced_by_fix,
-  worst severity non-increasing, no reopens) no longer trips the churn
-  signal at all.
+  then closeout (set `REVIEW_LOOP_UNATTENDED=1` and the taken default is
+  recorded in rounds.md). A converging series (every open finding
+  introduced_by_fix, worst severity non-increasing over the rounds that
+  exist — minimum two, so short scoped runs qualify — no reopens) no
+  longer trips the churn signal at all. And when a run still stops
+  `thrashing_soft`/backstop but closeout leaves 0 blockers/majors open,
+  the report headline says `converged-in-closeout`, not "thrashing".
 - **CLOSEOUT** `[review]` — after any stop, one mop-up cycle fixes and
   re-verifies the leftover cheap findings: open `introduced_by_fix` findings
   (any severity — the loop's own regressions never ship to BACKLOG

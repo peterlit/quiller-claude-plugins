@@ -60,9 +60,14 @@ You orchestrate an iterative review loop between the `implementer` and
    by a previous session; confirm with the human if unsure) — archive it
    before anything else:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py archive .review-loop`
-   (moves ledger, rounds, report, fragments, briefs, and .phase into
-   `.review-loop/archive/<timestamp-sha>/`; pass a name to override). Never
-   pile a new loop's files next to an old one's.
+   (moves ledger, rounds, report, fragments, briefs, .phase, and
+   `evidence/round-*` into `.review-loop/archive/<timestamp-sha>/`; pass a
+   name to override). Never pile a new loop's files next to an old one's.
+   Repos under iCloud/Dropbox can grow ` 2`-suffixed duplicate names during
+   moves — archive now moves per file and FAILS LOUDLY if a sync-conflict
+   duplicate appears (measured: one sat unnoticed for 3 hours); resolve it
+   before doing anything else (plain name missing ⇒ the duplicate IS the
+   real file — mv it back).
 2. If `.review-loop/ledger.json` doesn't exist, create it with:
    `{ "round": 0, "round_start_sha": null, "max_rounds": 5, "token_budget": null, "findings": [] }`
    (use the user's max_rounds / token_budget if they gave them). SCOPE mode
@@ -220,7 +225,11 @@ one closeout pass), and sets the phase marker.
    — metrics then makes the NEXT thrashing signal hard automatically
    instead of re-asking an answered question.
    Running UNATTENDED, don't wait on an answer that cannot come — take the
-   default: abort with the report, then run CLOSEOUT. Anything else -> run
+   default: abort with the report, then run CLOSEOUT. Set
+   `REVIEW_LOOP_UNATTENDED=1` in the environment before an unattended loop:
+   next-round then records the taken default in rounds.md, so the report
+   explains itself instead of needing a hand-written note (a field run had
+   to write "the default was taken" into the WATCH LIST by hand). Anything else -> run
    the PANEL FINAL PASS if configured, then CLOSEOUT if eligible, write the
    final report, then set `.review-loop/.phase` to "done".
 
@@ -254,7 +263,11 @@ belong in the no-iteration phase: punt it to BACKLOG with a sketch, or, if
 it is a major, tell the human it needs a real round (measured: one closeout
 "minor" grew into hand-rolled map projections — 28% of the whole run's
 cost — in the one phase where no iteration can follow). Say this in the
-closeout implementer's brief.
+closeout implementer's brief — and say WHERE punts go: "write each punt
+sketch to `.review-loop/briefs/closeout-punts.md`" (the implementer must
+not touch BACKLOG.md, and a sketch living only in a commit message was
+flagged ACTION OUTSTANDING in the field). At record time YOU copy those
+sketches into the repo-root BACKLOG.md.
 Eligible findings: open auto-routed findings that are introduced_by_fix (any
 severity — the loop created these regressions and must not ship them to
 BACKLOG), plus open minors. Open majors that are NOT introduced_by_fix are
@@ -320,8 +333,13 @@ never closed out — they stopped the loop for a reason a human should see.
   consecutive rounds, OR the same region recurs in new/reopened findings for
   three consecutive rounds. -> stop; the numbers aren't trustworthy, hand to human.
   Exempt from the churn signal: a CONVERGING SERIES — every open finding is
-  introduced_by_fix, the worst open severity is non-increasing over three
-  rounds, and nothing reopened. That is residue shrinking by construction.
+  introduced_by_fix, the worst open severity is non-increasing over the
+  rounds that exist (up to three, minimum two — a max_rounds=2 scoped run
+  can qualify; a hard three-round window once headlined a converging scoped
+  run as "thrashing"), and nothing reopened. That is residue shrinking by
+  construction. When a run still stops `thrashing_soft` or at the backstop
+  but closeout leaves 0 blockers/majors open, the report headlines
+  `converged-in-closeout` (the original stop stays in rounds.md).
 - THRASHING_SOFT: the same signals but with 0 open blockers AND positive
   closes this round. -> STOP and ask the human: abort with the report, or
   run one more round? A second thrashing signal after an approved
@@ -370,6 +388,8 @@ merge_ledger.py's verbs:
   Scale is WORKLOAD-DEPENDENT: measured ~4x below billed effective for code loops, ~11x for
   simulator loops — the ratio grows with turns per dispatch; budget on the reported scale.
   next-round takes repeatable `--usage role=tokens` (replace semantics) so no separate calls are needed.
+  CLOSEOUT shares the last round's number: record its usage with `add-usage` (accumulate) —
+  `set-usage`/`next-round --usage` REPLACE and would silently erase that round's figures.
 - next-round:`merge_ledger.py next-round <loop-dir> <N> [--fragment F]` (merge + metrics + advance, one turn)
 - panel-tally:`merge_ledger.py panel-tally <ledger> <N|final> <verified.json>` (per-lane
   filed/confirmed/demoted/rejected counts into ledger["panel"] — the report's Panel
