@@ -28,8 +28,10 @@ times out, errors, or lacks consent is SKIPPED with a note — the panel never
 blocks a round. Consent is MACHINE-LOCAL state the reviewed repo cannot
 carry: it lives at $XDG_CONFIG_HOME/review-loop-tools/consent/<sha256 of the
 loop dir's realpath>.json (XDG_CONFIG_HOME defaults to ~/.config and is
-honored only when absolute AND outside the reviewed repo; the consent-path
-verb prints the exact file), written by the human at the setup gate. NOTHING inside the repo may authorize egress or shell: panel.json
+honored only when absolute AND outside the reviewed repo; a HOME that
+itself resolves inside the repo leaves no trustworthy base and disables
+consent entirely for the run; the consent-path verb prints the exact
+file), written by the human at the setup gate. NOTHING inside the repo may authorize egress or shell: panel.json
 travels in git, and an in-repo panel-consent.json — cloned, force-added, or
 shipped inside a ZIP/`git archive`/cp -r bundle unpacked anywhere — is
 IGNORED with a stderr hint. Lanes whose
@@ -131,23 +133,38 @@ def consent_path(loop):
     repo root is dirname(realpath(loop)) — the loop dir lives at
     <repo>/.review-loop by convention, no git needed — and both sides are
     realpath'd so a symlink alias of an in-repo dir cannot slip past.
-    Rejection falls back to ~/.config: worst case is a consent miss and
+    A rejected XDG base falls back to ~/.config — but HOME arrives by the
+    SAME repo-shipped-env vector, so the fallback gets the same containment
+    check, and there the failure is terminal: when even ~/.config resolves
+    inside the repo there is NOWHERE trustworthy left, and this returns
+    None — hard fail-closed, no consent honored (callers treat None as an
+    empty consent store). Worst case in every branch is a consent miss and
     skipped lanes, never fail-open."""
+    repo_root = os.path.dirname(os.path.realpath(loop))
+    def inside_repo(b):
+        return os.path.commonpath([os.path.realpath(b), repo_root]) == repo_root
     base = os.environ.get("XDG_CONFIG_HOME")
     if base and not os.path.isabs(base):
         print(f"panel_review: ignoring relative XDG_CONFIG_HOME ({base!r}) — "
               f"consent must live outside any checkout; using ~/.config",
               file=sys.stderr)
         base = None
-    if base:
-        repo_root = os.path.dirname(os.path.realpath(loop))
-        if os.path.commonpath([os.path.realpath(base), repo_root]) == repo_root:
-            print(f"panel_review: ignoring XDG_CONFIG_HOME ({base!r}) — it "
-                  f"resolves inside the reviewed repo ({repo_root}), where a "
-                  f"clone or unpacked bundle could ship a pre-armed consent "
-                  f"store; using ~/.config", file=sys.stderr)
-            base = None
-    base = base or os.path.expanduser("~/.config")
+    if base and inside_repo(base):
+        print(f"panel_review: ignoring XDG_CONFIG_HOME ({base!r}) — it "
+              f"resolves inside the reviewed repo ({repo_root}), where a "
+              f"clone or unpacked bundle could ship a pre-armed consent "
+              f"store; using ~/.config", file=sys.stderr)
+        base = None
+    if not base:
+        base = os.path.expanduser("~/.config")
+        if inside_repo(base):
+            print(f"panel_review: the fallback consent base {base!r} ALSO "
+                  f"resolves inside the reviewed repo ({repo_root}) — HOME "
+                  f"appears to be repo-controlled (.envrc/devcontainer/"
+                  f"Makefile export); there is no trustworthy consent "
+                  f"location left, so NO consent is honored this run",
+                  file=sys.stderr)
+            return None
     key = hashlib.sha256(os.path.realpath(loop).encode("utf-8")).hexdigest()
     return os.path.join(base, "review-loop-tools", "consent", key + ".json")
 
@@ -157,22 +174,37 @@ def load_consent(loop):
     An in-repo panel-consent.json (the pre-0.12 location, or one shipped by
     a clone/bundle) authorizes NOTHING and earns a stderr hint; existing
     checkouts re-consent once at the new path. A malformed or non-object
-    consent file fails CLOSED (no consent), never with a traceback."""
+    consent file fails CLOSED (no consent), never with a traceback; so does
+    a None consent_path (no trustworthy base — see consent_path). A truthy
+    non-boolean remote_lanes_approved ('yes', 1) grants nothing — the gate
+    is `is True` — and earns a warning so the human-edited file gets fixed
+    instead of silently skipping lanes."""
     legacy = os.path.join(loop, "panel-consent.json")
     path = consent_path(loop)
     if os.path.exists(legacy):
+        where = (f"Machine-local consent lives at {path} (re-consent there; "
+                 f"delete the in-repo file to silence this)" if path else
+                 f"no trustworthy machine-local store exists in this "
+                 f"environment (see the warning above)")
         print(f"panel_review: {legacy} is IGNORED — files inside the repo "
               f"can arrive with a clone or an unpacked bundle and must never "
-              f"authorize egress or shell. Machine-local consent lives at "
-              f"{path} (re-consent there; delete the in-repo file to silence "
-              f"this)", file=sys.stderr)
+              f"authorize egress or shell. {where}", file=sys.stderr)
+    if path is None:
+        return {}
     try:
         c = load_json(path, {})
     except (ValueError, OSError) as e:
         print(f"panel_review: consent file {path} unreadable ({e}) — "
               f"treating as NO consent", file=sys.stderr)
         return {}
-    return c if isinstance(c, dict) else {}
+    c = c if isinstance(c, dict) else {}
+    rla = c.get("remote_lanes_approved")
+    if rla and rla is not True:
+        print(f"panel_review: consent file {path} has "
+              f"remote_lanes_approved={rla!r} — only JSON true grants "
+              f"remote-lane consent; treating as NOT approved",
+              file=sys.stderr)
+    return c
 
 def consent_path_cmd(args):
     """`consent-path [<loop-dir>]`: print where consent for this loop lives,
@@ -190,6 +222,12 @@ def consent_path_cmd(args):
               f"repo root or pass the loop dir explicitly", file=sys.stderr)
         sys.exit(2)
     p = consent_path(loop)
+    if p is None:
+        # consent_path already named the poisoned base on stderr.
+        print("panel_review: no trustworthy consent location — fix "
+              "HOME/XDG_CONFIG_HOME so the config dir lives outside the "
+              "reviewed repo, then re-run", file=sys.stderr)
+        sys.exit(2)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     print(p)
 
@@ -384,17 +422,17 @@ def sanitize(obj, lane):
     for f in obj["findings"]:
         if not isinstance(f, dict):
             continue
-        # Normalize severity, don't just gate on it: models emit 'Major',
-        # and a non-string severity (list/dict is unhashable) must skip THIS
-        # candidate — a TypeError here would discard the whole lane batch.
+        # Severity NEVER gates a candidate with claim + evidence intact:
+        # models emit 'Major', 'Warning', omit the key, or send a list
+        # (unhashable — a TypeError would discard the whole lane batch).
+        # Anything out of vocabulary — unknown string, blank, missing,
+        # non-string — clamps to 'minor' rather than silently dropping the
+        # finding: the verifier adjudicates severity anyway.
         sev = f.get("severity")
         sev = sev.strip().lower() if isinstance(sev, str) else ""
-        if sev and sev not in SEVERITIES:
-            # Out-of-vocabulary STRING ('warning', 'critical', 'info'):
-            # clamp to a default instead of silently dropping the finding —
-            # the verifier adjudicates severity anyway.
+        if sev not in SEVERITIES:
             sev = "minor"
-        if not f.get("claim") or sev not in SEVERITIES:
+        if not f.get("claim"):
             continue
         ev = f.get("evidence")
         if not (isinstance(ev, list) and ev):
@@ -615,12 +653,14 @@ def run_lane(lane, loop, rnd, repo, consent):
     base = os.path.join(frag_dir, f"round-{rnd}-{safe_lane_name(name)}")
     lane["_out_base"] = base
     # Consent gates by DESTINATION and capability, not lane type alone.
-    if kind in ("codex", "gemini") and not consent.get("remote_lanes_approved"):
+    # Grants are `is True`, never truthiness: the consent file is human-
+    # edited, and "yes"/"false"/1 must not open remote egress.
+    if kind in ("codex", "gemini") and consent.get("remote_lanes_approved") is not True:
         return {"lane": name, "status": "skipped",
                 "note": "no remote-lane consent (machine-local consent file; "
                         "`panel_review.py consent-path <loop>` prints it)"}
     if kind == "ollama" and not is_loopback(OLLAMA_URL) \
-            and not consent.get("remote_lanes_approved"):
+            and consent.get("remote_lanes_approved") is not True:
         return {"lane": name, "status": "skipped",
                 "note": f"OLLAMA_HOST {OLLAMA_URL} is not loopback — the diff "
                         f"would leave this machine; needs remote-lane consent "

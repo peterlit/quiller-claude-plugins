@@ -25,7 +25,9 @@ path splice; sanitize() normalizes severity case and skips (not crashes
 on) unhashable severities; the .stat read tolerates invalid UTF-8;
 ollama_need is byte-aware and run_ollama re-checks prompt_eval_count;
 normalize_url strips trailing slashes; render_report tolerates a
-bare-string 'sources'.
+bare-string 'sources'. (Severity handling later tightened: unhashable —
+like every other out-of-vocabulary severity — now clamps to minor rather
+than skipping the row.)
 
 Round-2 additions: the codex lane end to end through a RELATIVE loop dir
 (a stub `codex` on PATH — the jail cwd must not swallow the
@@ -54,12 +56,18 @@ checkout and with no .git anywhere; consent_path is stable across
 relative/absolute spellings of the loop dir; the consent-path verb prints
 the machine-local file.
 
-Post-closeout addition: an ABSOLUTE XDG_CONFIG_HOME that resolves INSIDE
+Post-closeout additions: an ABSOLUTE XDG_CONFIG_HOME that resolves INSIDE
 the reviewed repo (repo-shipped env: .envrc, devcontainer, a Makefile
 export) is rejected — the bundled-archive attack armed with an in-checkout
 .config consent store fails closed end to end, a symlink alias of an
 in-repo base is caught (realpath both sides), and an out-of-repo absolute
-base is still honored.
+base is still honored. The ~/.config FALLBACK gets the same containment
+check (HOME arrives by the same repo-shipped-env vector): a HOME inside
+the checkout leaves no trustworthy base — consent_path returns None,
+load_consent fails closed, the HOME-armed bundle attack fails end to end,
+and the consent-path verb refuses with a fix hint. remote_lanes_approved
+grants only as JSON true — a truthy non-boolean ('yes') gates lanes
+closed and warns. Missing/blank severity clamps to minor (see above).
 """
 import contextlib, hashlib, io, json, os, re, shlex, shutil, subprocess, sys
 import tempfile, time
@@ -363,14 +371,16 @@ def main():
            and pr.normalize_url("h:11434/") == "http://h:11434",
            "normalize_url strips trailing slash, scheme-less form included")
 
-        # --- sanitize: severity normalized; unhashable skips ONE row ---
+        # --- sanitize: severity normalized; unhashable clamps, not crashes ---
         s = pr.sanitize({"findings": [
             {"claim": "caps", "evidence": ["a:1"], "severity": "Major"},
             {"claim": "bad", "evidence": ["a:1"], "severity": ["major"]},
             {"claim": "low", "evidence": ["a:1"], "severity": "minor"}]}, "l")
-        ok(s["filed"] == 2
-           and sorted(f["severity"] for f in s["findings"]) == ["major", "minor"],
-           "sanitize normalizes 'Major', skips (not crashes on) unhashable severity")
+        ok(s["filed"] == 3
+           and sorted(f["severity"] for f in s["findings"])
+           == ["major", "minor", "minor"],
+           "sanitize normalizes 'Major', clamps (not crashes on) unhashable "
+           "severity to minor")
 
         # --- lane name from panel.json cannot traverse out of panel/ ---
         sn = pr.safe_lane_name("../../../tmp/x")
@@ -883,6 +893,77 @@ def main():
            "symlinked-into-repo XDG_CONFIG_HOME rejected "
            "(realpath both sides)")
 
+        # --- the ~/.config FALLBACK gets the same containment check: HOME
+        # arrives by the same repo-shipped-env vector, and with HOME inside
+        # the checkout there is NOWHERE trustworthy left — consent_path
+        # returns None (hard fail-closed), load_consent grants nothing ---
+        real_home = os.environ.get("HOME")
+        buf = io.StringIO()
+        try:
+            del os.environ["XDG_CONFIG_HOME"]
+            os.environ["HOME"] = os.path.join(td, "fakehome-unit")
+            with contextlib.redirect_stderr(buf):
+                p_home = pr.consent_path(loop)
+                no_consent = pr.load_consent(loop)
+        finally:
+            os.environ["HOME"] = real_home
+            os.environ["XDG_CONFIG_HOME"] = hermetic_xdg
+        ok(p_home is None and no_consent == {}
+           and "HOME" in buf.getvalue()
+           and "NO consent" in buf.getvalue(),
+           "in-repo HOME poisons the fallback too: consent_path None, "
+           "load_consent fails closed, warning names HOME")
+
+        # --- HOME-armed bundle attack END TO END: bundle ships panel.json
+        # (cmd lane) + a consent store under .fakehome/.config, env exports
+        # HOME=$PWD/.fakehome — the lane must be SKIPPED, cmd never run ---
+        hroot = os.path.join(td, "home-attack")
+        marker4 = os.path.join(td, "pwned-home")
+        make_bundle(hroot, marker4)
+        hloop = os.path.join(hroot, ".review-loop")
+        fake_home = os.path.join(hroot, ".fakehome")
+        hkey = hashlib.sha256(
+            os.path.realpath(hloop).encode("utf-8")).hexdigest()
+        harmed = os.path.join(fake_home, ".config", "review-loop-tools",
+                              "consent", hkey + ".json")
+        os.makedirs(os.path.dirname(harmed))
+        shutil.copy(os.path.join(hloop, "panel-consent.json"), harmed)
+        henv = {k: v for k, v in os.environ.items()
+                if k != "XDG_CONFIG_HOME"}
+        henv["HOME"] = fake_home
+        r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "run", ".review-loop", "0"], cwd=hroot, env=henv)
+        lanes = {l["lane"]: l for l in json.loads(r.stdout)["lanes"]}
+        ok(r.returncode == 0 and lanes["evil"]["status"] == "skipped"
+           and not os.path.exists(marker4),
+           "in-checkout HOME + pre-armed .fakehome consent store fails "
+           "closed (cmd never executed)")
+        ok("HOME" in r.stderr and "NO consent" in r.stderr,
+           "in-checkout HOME rejection is called out on stderr")
+        # ...and the consent-path verb refuses instead of printing a path
+        # inside the checkout that a bundle could pre-arm.
+        r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "consent-path", hloop], env=henv)
+        ok(r.returncode != 0 and not r.stdout.strip()
+           and "no trustworthy consent location" in r.stderr,
+           "consent-path verb refuses when even the fallback base is "
+           "in-repo, with a fix hint")
+
+        # --- remote_lanes_approved grants ONLY as JSON true: a truthy
+        # non-boolean in the human-edited file must gate lanes closed ---
+        write_consent(loop, {"remote_lanes_approved": "yes"})
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            c_yes = pr.load_consent(loop)
+        ok(c_yes.get("remote_lanes_approved") == "yes"
+           and "only JSON true" in buf.getvalue(),
+           "truthy non-boolean remote_lanes_approved warns on load")
+        lanes = run_panel(td, {"OLLAMA_HOST": "http://gpu.example:11434"})
+        ok(lanes["codexlane"]["status"] == "skipped"
+           and lanes["local"]["status"] == "skipped",
+           "remote_lanes_approved='yes' (truthy, not true) still gates "
+           "remote lanes closed")
+
         # --- safe_lane_name: a sanitized output re-minted as a raw lane
         # name must not collide with the original's output base ---
         ok(pr.safe_lane_name(pr.safe_lane_name("a.b"))
@@ -892,12 +973,17 @@ def main():
         ok(pr.safe_lane_name("codex") == "codex",
            "clean unsuffixed-looking names still pass through byte-identical")
 
-        # --- sanitize: out-of-vocabulary severity STRING clamps, not drops ---
+        # --- sanitize: out-of-vocabulary, MISSING, and blank severity all
+        # clamp, never drop — a candidate with claim + evidence intact must
+        # reach the verifier (which adjudicates severity anyway) ---
         s2 = pr.sanitize({"findings": [
-            {"claim": "warn", "evidence": ["a:1"], "severity": "Warning"}]},
+            {"claim": "warn", "evidence": ["a:1"], "severity": "Warning"},
+            {"claim": "none", "evidence": ["a:1"]},
+            {"claim": "blank", "evidence": ["a:1"], "severity": "  "}]},
             "l")
-        ok(s2["filed"] == 1 and s2["findings"][0]["severity"] == "minor",
-           "unknown severity string ('Warning') clamps to minor instead of "
+        ok(s2["filed"] == 3
+           and all(f["severity"] == "minor" for f in s2["findings"]),
+           "unknown/missing/blank severity clamps to minor instead of "
            "silently dropping the candidate")
 
         # --- render_report: 'sources'-only finding still renders its tags ---
