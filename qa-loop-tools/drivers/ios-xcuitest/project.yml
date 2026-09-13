@@ -1,0 +1,29 @@
+# QADriver — the ios-xcuitest backend of the qa-loop driver contract: a
+# scriptable XCUITest that drives ANY installed app (bundle id passed at
+# start) on one simulator. The pre-generated QADriver.xcodeproj ships with
+# the backend; regenerate it with `xcodegen generate` only if you edit this.
+name: QADriver
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+targets:
+  QADriver:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tools.quiller.qa.QADriver
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGN_IDENTITY: ""
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+schemes:
+  QADriver:
+    build:
+      targets:
+        QADriver: all
+    test:
+      targets: [QADriver]

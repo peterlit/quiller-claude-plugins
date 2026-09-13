@@ -316,6 +316,37 @@ when the CLIs exist.*
   `via panel:<lane>`; a finding tagged with several lanes is cross-family
   agreement — read it first.
 
+## Driver backends (qa)
+
+*Surface: `${CLAUDE_PLUGIN_ROOT}/drivers/<backend>/`, copied to
+`.qa-loop/driver/` at Stage 0.*
+
+- **The driver contract** `[qa]` — a platform-neutral verb set every
+  backend serves against one device/session: `launch [K=V…]`,
+  `activate`/`terminate`/`home`/`state`/`frame`, `tap`/`doubletap`/
+  `press`/`drag`/`dragslow`/`swipe`, `type`/`key`/`selectall`,
+  `shot <host-path>`, `find`/`findall`/`wait <id>`, `tapid`/`tapoffset`/
+  `tapbtn`/`taptext`/`btn`/`text`, `labels [kind] [substring]`, `alert`,
+  `tree [depth]`, `rotate`/`orientation`, `sleep`/`ping`/`quit`. Replies
+  are `OK …`/`ERR …`; coordinates are device points; element queries use
+  accessibility identifiers/labels. Tester prompts speak ONLY these verbs;
+  everything platform-specific lives below the contract line.
+- **`ios-xcuitest`** `[qa]` — the shipped backend: a scriptable XCUITest
+  server + `qa.py` client, target app passed at start
+  (`start.sh <udid> <bundle-id>`). Needs NO per-device MCP grant — the
+  autonomous-run killer — and launches with a fixture environment,
+  rotates, and dumps every visible label in one call (measured: 130
+  screenshots in 3,161 requests vs 440 the loop before). Build cache
+  (`dd/`) stays on disk, ignored by the allowlist.
+  *In practice:* nothing to configure; Stage 0 copies and starts it. The
+  MCP simulator tool is the fallback when the driver cannot build.
+- **The seam** `[qa]` — `provision_workers.sh`, the
+  regression-test-writer, and the `ios-xcuitest` backend are the iOS
+  backend family. A future `android-appium/` or `web-playwright/` backend
+  implements the same verb table in its own directory with its own
+  provisioner/regression-writer equivalents; the skill text above the
+  driver line does not change.
+
 ## Model pins
 
 *Surface: `agents/*.md` frontmatter.*

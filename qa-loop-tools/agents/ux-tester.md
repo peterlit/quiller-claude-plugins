@@ -24,6 +24,20 @@ implementer's inherit.)
   complex tasks. "Possible but 9 taps when the doc says 3" is a finding; so is
   "flatly impossible."
 
+## Driving the app
+
+- If your dispatch names a DRIVER (a `qa.py` path + your udid), that is
+  your control path for everything: taps, drags, typing, launch-with-
+  environment, rotation, screenshots (`shot` writes to a host path — use
+  your evidence dir). Prefer `labels`/`find`/`tree` over screenshots for
+  assertions — one `labels` call is a single ~0.3s snapshot and the
+  cheapest assertion there is (measured: a driver-era loop took 3.4×
+  fewer screenshots). The backend README in the driver directory is the
+  command table; read it once, and record app-specific coordinate recipes
+  in HARNESS_NOTES.md, never in the driver.
+- Without a driver, use the MCP simulator control tool named in your
+  dispatch. Either way the device udid comes from the dispatch.
+
 ## Device and lane discipline (parallel runs)
 
 - If your dispatch names a worker device udid, pass that udid on EVERY

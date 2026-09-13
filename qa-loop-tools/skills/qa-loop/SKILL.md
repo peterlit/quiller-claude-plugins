@@ -90,16 +90,30 @@ it cost a run its whole parallel lane):
   marks each worker `"reused": true|false` — a reused device keeps its
   grant; probe created ones first. Any worker failing the probe: drop to
   the granted subset (or sequential) BEFORE wave 1 and tell the human
-  which udids need a grant — never discover it mid-wave.
-If the control tools do NOT reach subagents at all, warn the human BEFORE
-proceeding: without them, testers must drive the app through XCUITest
-drivers they build themselves, which multiplies token cost several-fold.
-If the human proceeds anyway, the driver is built ONCE — in
-`.qa-loop/driver/` — and every tester dispatch points at it, with its
-usage documented in HARNESS_NOTES.md. Never let each tester rebuild a
-driver from scratch. (A field-built generic driver also REMOVES the
-per-device grant problem entirely — it drives the app as an XCUITest, no
-MCP grant involved — and is the planned shipped path.)
+  which udids need a grant — never discover it mid-wave. (With the
+  shipped driver serving on a worker, `qa.py <udid> ping` IS the probe —
+  no grant exists to check on that path.)
+PREFERRED CONTROL PATH — the shipped driver backend. The plugin ships a
+generic XCUITest driver (the `ios-xcuitest` backend of the driver
+contract) at `${CLAUDE_PLUGIN_ROOT}/drivers/ios-xcuitest/`. If
+`.qa-loop/driver/` does not exist, copy the backend there once:
+`cp -R ${CLAUDE_PLUGIN_ROOT}/drivers/ios-xcuitest/ .qa-loop/driver/`
+(NEVER build inside the plugin cache — an update sweeps it away; `dd/`
+build cache stays on disk, ignored by the allowlist). Start one server
+per worker device:
+`bash .qa-loop/driver/start.sh <udid> <app-bundle-id>`
+and the grant probe becomes `python3 .qa-loop/driver/qa.py <udid> ping` —
+the driver needs NO per-device MCP grant, so autonomous parallel runs
+need no human at the keyboard, and it does things the MCP tool cannot
+(launch with a fixture environment, rotate, identifier queries, one-call
+`labels` dumps — measured: 130 screenshots in 3,161 requests vs 440 the
+loop before). Tester dispatches name the qa.py path, the worker udid, and
+the backend README's command table; testers prefer `labels`/`find` over
+screenshots. The MCP simulator tool remains the FALLBACK when the driver
+cannot build (no Xcode toolchain for it, non-UIKit host); the per-device
+grant rules above then apply in full. A pre-existing hand-built
+`.qa-loop/driver/` keeps working — don't overwrite it without checking it
+predates the shipped backend and offers nothing extra.
 Build/install/launch steps must name the loop-owned udid EXPLICITLY on
 every call — a device-less `xcodebuild`/MCP build targets "the first
 booted device", which in a shared-Mac session can be another loop's
