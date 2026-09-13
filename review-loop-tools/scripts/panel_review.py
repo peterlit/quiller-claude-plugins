@@ -37,9 +37,13 @@ invokes (`bash tools/lane.sh` stays approved while lane.sh changes under a
 pull) — prefer self-contained commands.
 
 Phase 1 is diff-only for every lane: the model sees the stat and the diff,
-not the repo — codex/gemini run in an empty scratch cwd so their file tools
-have no workspace to read, and loopback ollama traffic bypasses HTTP(S)_PROXY
-so "local" cannot silently route off-machine. Candidates carry no IDs and no
+not the repo — codex/gemini run in an empty scratch cwd with a scrubbed env
+so their file tools have no workspace to read, and loopback ollama traffic
+bypasses HTTP(S)_PROXY so "local" cannot silently route off-machine.
+KNOWN RESIDUAL: codex's --sandbox read-only still permits ABSOLUTE-path
+reads (no tighter codex flag exists today), so the jail removes workspace
+DISCOVERY, not read capability — a prompt injection in the reviewed diff
+that already knows a path could read (never write) files outside the diff. Candidates carry no IDs and no
 status — the panel-verifier
 agent verifies them against the code and only the skeptical-reviewer (the
 chair) ever writes the ledger fragment.
@@ -119,10 +123,12 @@ def consent_git_status(path):
 def in_git_worktree(path):
     """Filesystem-level 'is this inside a checkout': any .git (dir, or file
     for worktrees/submodules) up the tree. Splits 'git could not answer'
-    into its two honest cases — no checkout anywhere means nothing could
-    have TRACKED the consent file into place (safe to honor), while a
-    checkout git refuses to read could be hiding a force-committed consent
-    (must fail closed)."""
+    into its two honest cases — a checkout git refuses to read could be
+    hiding a force-committed consent (fail closed unconditionally), while
+    'no checkout anywhere' is still only ABSENCE of evidence: ZIP downloads,
+    `git archive`, and cp -r all strip .git while keeping a force-added
+    consent file, so that case needs the explicit PANEL_REVIEW_CONSENT_NO_GIT
+    opt-in, never a silent honor."""
     d = os.path.dirname(os.path.abspath(path))
     while True:
         if os.path.exists(os.path.join(d, ".git")):
@@ -137,8 +143,12 @@ def load_consent(loop):
     panel-consent.json — never from git-tracked panel.json, so a file that
     arrives with a clone cannot approve egress or shell execution. A
     force-committed panel-consent.json is refused for the same reason; an
-    unreadable one, or one whose tracked-ness git CANNOT CONFIRM inside a
-    checkout, fails CLOSED (no consent), never with a traceback."""
+    unreadable one, or one whose tracked-ness git CANNOT CONFIRM, fails
+    CLOSED (no consent), never with a traceback. Outside any checkout the
+    same attack survives .git removal (ZIP download, `git archive`, cp -r
+    keep force-added files), so no-.git is NOT consent either: deliberate
+    non-repo use must set PANEL_REVIEW_CONSENT_NO_GIT=1 (the selftest's
+    tempdirs do)."""
     path = os.path.join(loop, "panel-consent.json")
     if not os.path.exists(path):
         return {}
@@ -148,11 +158,22 @@ def load_consent(loop):
               "must be per-checkout; ignoring it (git rm --cached it, then "
               "re-consent locally)", file=sys.stderr)
         return {}
-    if status == "unknown" and in_git_worktree(path):
-        print("panel_review: cannot verify panel-consent.json is untracked "
-              "(git could not answer inside this checkout) — failing CLOSED, "
-              "no consent", file=sys.stderr)
-        return {}
+    if status == "unknown":
+        if in_git_worktree(path):
+            # Inside a checkout, git-can't-answer could be hiding a
+            # force-committed consent — no env var may weaken this.
+            print("panel_review: cannot verify panel-consent.json is "
+                  "untracked (git could not answer inside this checkout) — "
+                  "failing CLOSED, no consent", file=sys.stderr)
+            return {}
+        if os.environ.get("PANEL_REVIEW_CONSENT_NO_GIT") != "1":
+            print("panel_review: no git checkout found above "
+                  "panel-consent.json, so git cannot vouch it is untracked "
+                  "— failing CLOSED (ZIP/`git archive`/cp -r exports keep a "
+                  "force-added consent file while stripping .git). For "
+                  "deliberate non-repo use set PANEL_REVIEW_CONSENT_NO_GIT=1",
+                  file=sys.stderr)
+            return {}
     try:
         c = load_json(path, {})
     except (ValueError, OSError) as e:
@@ -475,6 +496,15 @@ def run_ollama(lane, prompt, repo, timeout):
     # lands near 8k, far below `need`, so only a pre-call refusal against
     # the trained context catches it.
     model_ctx = ollama_model_ctx(model)
+    if model_ctx is None:
+        # /api/show failed or carried no *.context_length (llama.cpp server,
+        # LM Studio, older ollama): the clamp guard below is INERT this run.
+        # Say so — a silently-ungated run must be distinguishable from a
+        # checked one, or a clamped 8k model reports truncation as ok.
+        print(f"panel_review: warning: could not read {model}'s trained "
+              f"context from {OLLAMA_URL}/api/show — silent-clamp guard "
+              f"inactive; a num_ctx above the model's real context would "
+              f"truncate undetected", file=sys.stderr)
     if model_ctx and need > model_ctx:
         raise ValueError(
             f"prompt needs num_ctx ~{need} but {model}'s trained context is "
@@ -548,6 +578,11 @@ def safe_lane_name(name):
     return safe
 
 def run_lane(lane, loop, rnd, repo, consent):
+    if not isinstance(lane, dict):
+        # A merge-mangled panel.json can hold {"lanes": ["codex"]} — a bare
+        # string element must skip with a note, not AttributeError the map.
+        return {"lane": str(lane)[:64], "status": "skipped",
+                "note": f"lane entry is not an object (got {type(lane).__name__})"}
     name, kind = lane.get("name"), lane.get("type", lane.get("name"))
     if not lane.get("enabled", True):
         return {"lane": name, "status": "skipped", "note": "disabled (enabled: false)"}
@@ -643,7 +678,10 @@ def run(args):
         try:
             return run_lane(l, loop, rnd, repo, consent)
         except Exception as e:
-            return {"lane": l.get("name"), "status": "error",
+            # l may not be a dict — the handler that exists to keep one lane
+            # from losing the others must not itself assume lane shape.
+            lname = l.get("name") if isinstance(l, dict) else str(l)[:64]
+            return {"lane": lname, "status": "error",
                     "note": f"{type(e).__name__}: {e}"[:200]}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(lanes)) as ex:
         results = list(ex.map(safe, lanes))

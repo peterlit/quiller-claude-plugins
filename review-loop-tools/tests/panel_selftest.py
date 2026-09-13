@@ -37,6 +37,15 @@ paying for generate, gives clamp-proof advice, and preserves the response
 on the truncation raise; punctuation-differing lane names no longer
 collide on one output base; codex/gemini env is scrubbed (no CLAUDE_*,
 pwd vars point at the jail).
+
+Round-3 additions: a non-dict lane ELEMENT ({"lanes": ["codex"]}) skips
+with a note instead of crashing the map (and safe()'s handler no longer
+assumes lane shape); consent outside ANY git checkout fails CLOSED unless
+PANEL_REVIEW_CONSENT_NO_GIT=1 is set explicitly (the bundled-archive
+attack: ZIP/`git archive` strip .git but keep a force-added consent) —
+this selftest sets it for its tempdirs and proves the refusal without it;
+run_ollama warns on stderr when /api/show yields no trained context (the
+clamp guard must never go inert silently).
 """
 import contextlib, hashlib, io, json, os, re, shlex, shutil, subprocess, sys
 import tempfile, time
@@ -79,6 +88,9 @@ def make_loop(root):
             {"name": "off", "type": "cmd", "cmd": "true", "enabled": False},
             {"name": "codexlane", "type": "codex"},
             {"name": "local", "type": "ollama"},
+            # A merge-mangled panel can hold a bare string element — it must
+            # skip with a note, not AttributeError the whole lane map.
+            "straylane",
         ],
             # Consent fields written INTO the git-tracked panel.json — the
             # withdrawn design. They must authorize NOTHING: a committed
@@ -101,6 +113,12 @@ def run_panel(root, env_extra=None):
     return {l["lane"]: l for l in json.loads(r.stdout)["lanes"]}
 
 def main():
+    # The selftest's tempdirs are the one legitimate no-git-checkout consumer
+    # of panel-consent.json: absence of .git is no longer consent (a ZIP /
+    # `git archive` export keeps a force-added consent while stripping .git),
+    # so opt in EXPLICITLY — and prove below that without this the same
+    # tempdir consent is refused.
+    os.environ["PANEL_REVIEW_CONSENT_NO_GIT"] = "1"
     td = tempfile.mkdtemp(prefix="panel-selftest-")
     try:
         loop, good_cmd = make_loop(td)
@@ -123,6 +141,9 @@ def main():
            and "127.0.0.1.evil.com" in lanes["local"]["note"],
            "'127.' prefix-spoof OLLAMA_HOST gated as remote, endpoint named")
         ok(lanes["off"]["status"] == "skipped", "enabled:false honored")
+        ok(lanes["straylane"]["status"] == "skipped"
+           and "not an object" in lanes["straylane"]["note"],
+           "non-dict lane element skips with a note, map survives")
 
         # --- loopback is exact-host, never a prefix; scheme-less parses ---
         ok(not pr.is_loopback("https://127.0.0.1.evil.com"),
@@ -585,6 +606,47 @@ def main():
            and not pr.in_git_worktree(os.path.join(td, "nowhere.json")),
            "in_git_worktree: checkout detected, bare tempdir is not one")
 
+        # --- no .git anywhere is NOT consent: the fail-open is an explicit
+        # opt-in, never inferred from absence of a checkout (ZIP download,
+        # `git archive`, cp -r all strip .git but keep a force-added
+        # panel-consent.json) ---
+        ngloop = os.path.join(td, "nogit", ".review-loop")
+        os.makedirs(ngloop)
+        with open(os.path.join(ngloop, "panel-consent.json"), "w") as fh:
+            json.dump({"remote_lanes_approved": True,
+                       "cmd_lanes_approved": ["echo pwned"]}, fh)
+        ok(pr.load_consent(ngloop).get("remote_lanes_approved") is True,
+           "no-.git consent honored WITH explicit PANEL_REVIEW_CONSENT_NO_GIT")
+        del os.environ["PANEL_REVIEW_CONSENT_NO_GIT"]
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                ok(pr.load_consent(ngloop) == {},
+                   "no-.git consent REFUSED without the explicit opt-in "
+                   "(bundled-archive attack fails closed)")
+            ok("PANEL_REVIEW_CONSENT_NO_GIT" in buf.getvalue(),
+               "no-.git refusal names the documented opt-in on stderr")
+        finally:
+            os.environ["PANEL_REVIEW_CONSENT_NO_GIT"] = "1"
+
+        # --- safe()'s except handler must not assume lane shape: when
+        # run_lane raises ON a non-dict lane element, the wrapper whose job
+        # is 'one lane never aborts the map' must not be the crash site ---
+        real_run_lane = pr.run_lane
+        try:
+            def _boom(*a, **kw):
+                raise RuntimeError("boom")
+            pr.run_lane = _boom
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                pr.run([loop, "0"])   # panel.json includes the "straylane" str
+            res = json.loads(buf.getvalue())
+            ok(all(r["status"] == "error" for r in res["lanes"])
+               and any(r["lane"] == "straylane" for r in res["lanes"]),
+               "safe() handler reports a raising non-dict lane, map survives")
+        finally:
+            pr.run_lane = real_run_lane
+
         # --- ollama: trained-context clamp refused BEFORE generate ---
         calls = []
         def fake_ollama(req, t):
@@ -608,9 +670,14 @@ def main():
             pr.open_url = lambda req, t: FakeResp(
                 {"model_info": {}, "response": "paid-for",
                  "prompt_eval_count": 999999})
+            # model_info without *.context_length -> model_ctx None: the
+            # clamp guard is inert and MUST say so (a silently-ungated run
+            # must be distinguishable from a checked one).
+            errbuf = io.StringIO()
             try:
-                pr.run_ollama({"num_ctx_max": 65536, "_out_base": obase},
-                              "x" * 1000, td, 5)
+                with contextlib.redirect_stderr(errbuf):
+                    pr.run_ollama({"num_ctx_max": 65536, "_out_base": obase},
+                                  "x" * 1000, td, 5)
                 ok(False, "context-filling prompt_eval_count should raise")
             except ValueError as e:
                 ok("max_diff_tokens" in str(e)
@@ -618,6 +685,10 @@ def main():
                    "truncation advice names max_diff_tokens, not num_ctx_max")
                 ok(open(obase + ".raw.txt").read() == "paid-for",
                    "truncation raise still preserves the paid-for response")
+            ok("trained context" in errbuf.getvalue()
+               and "/api/show" in errbuf.getvalue(),
+               "unreadable trained context warns on stderr (guard not "
+               "silently inert)")
         finally:
             pr.open_url = real_open_url
 

@@ -246,6 +246,14 @@ when the CLIs exist.*
   panel.json). Private repo → local lane only (ollama on a loopback
   `OLLAMA_HOST`, nothing leaves the machine, no account; a non-loopback
   `OLLAMA_HOST` is treated as a remote lane).
+  Known residual: codex/gemini run in an empty scratch cwd with a scrubbed
+  env (no workspace to discover), but codex's `--sandbox read-only` still
+  permits absolute-path READS — a prompt injection in the reviewed diff
+  that already names a path could read (never write) files outside the
+  diff; no tighter codex sandbox flag exists today. Outside a git checkout
+  the script fails CLOSED on consent (a ZIP/`git archive` export keeps a
+  force-added consent file while stripping `.git`); deliberate non-repo
+  use requires `PANEL_REVIEW_CONSENT_NO_GIT=1`.
 - **Flood control and measurement** `[review]` — each lane files at most 10
   candidates by confidence; the report's Panel section shows per-lane
   filed/confirmed/demoted/rejected, and that kept-rate is the drop-or-keep
