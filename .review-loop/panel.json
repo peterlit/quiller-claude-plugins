@@ -1,7 +1,17 @@
 {
   "lanes": [
-    {"name": "ollama", "type": "ollama", "model": "qwen3-coder:30b", "timeout_s": 600, "max_diff_tokens": 32000}
+    {
+      "name": "codex",
+      "type": "codex",
+      "timeout_s": 600,
+      "max_diff_tokens": 32000
+    },
+    {
+      "name": "gemini",
+      "type": "gemini",
+      "timeout_s": 600,
+      "max_diff_tokens": 32000
+    }
   ],
-  "rounds": "seed+final",
-  "consent": {"remote_lanes_approved": false, "approved_by": "plit (local lane only; codex/gemini unavailable at probe)", "date": "2026-09-09"}
+  "rounds": "seed+final"
 }

@@ -1,16 +1,16 @@
 {
-  "round": 2,
+  "round": 4,
   "blockers_open": 0,
-  "majors_open": 1,
-  "minors_open": 3,
-  "closed": 3,
+  "majors_open": 0,
+  "minors_open": 2,
+  "closed": 2,
   "new": 2,
   "reopened": 0,
   "promoted": 0,
   "demoted": 0,
-  "net": 1,
-  "tokens": 94825,
-  "cumulative_tokens": 424334,
-  "decision": "backstop",
-  "reason": "hit max_rounds"
+  "net": 0,
+  "tokens": 156720,
+  "cumulative_tokens": 590556,
+  "decision": "converged",
+  "reason": "no open blockers or majors; none newly introduced"
 }

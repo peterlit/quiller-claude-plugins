@@ -1,269 +1,22 @@
 {
-  "round": 2,
-  "round_start_sha": "f6a99362b2004d1f93f420f42534c784d8620457",
-  "max_rounds": 2,
+  "round": 4,
+  "round_start_sha": "0c4258c6f3b83497584442cb59e7b0cbc32970b0",
+  "max_rounds": 5,
   "token_budget": null,
   "findings": [
     {
-      "id": "correctness/panel_review.py:lane-exception-aborts-panel",
-      "claim": "run_lane catches only TimeoutExpired/URLError/OSError, but the runners raise other exception types on ordinary misconfiguration and bad responses: run_cmd does lane[\"cmd\"] (KeyError if a cmd lane omits the key) and run_ollama does json.load(resp) (json.JSONDecodeError -- a ValueError, not an OSError -- if anything but JSON comes back from OLLAMA_URL, e.g. a proxy HTML page or a different service on 11434). The exception propagates out of ex.map, so ONE bad lane kills the whole panel run with a traceback, prints no JSON on stdout, and throws away the other lanes' already-completed candidates -- flatly contradicting the module docstring's 'A lane that times out, errors, or lacks consent is SKIPPED with a note -- the panel never blocks a round.' Verified by execution: a two-lane panel.json (lane a missing cmd, lane b returning valid candidates) exited with KeyError at panel_review.py:226 and produced zero output; lane b's result was lost.",
+      "id": "security/panel_review.py:consent-file-force-added-to-git",
+      "claim": "load_consent() reads whatever is at <loop>/panel-consent.json with no check that the file is actually untracked/per-checkout; nothing stops that file from being force-added to git (git add -f) despite the .gitignore convention, so a maliciously committed panel-consent.json would still authorize remote egress or cmd-shell execution on every clone/checkout.",
       "evidence": {},
       "severity": "major",
-      "region": "review-loop-tools/scripts/panel_review.py:233-294",
+      "region": "review-loop-tools/scripts/panel_review.py:108-162",
       "introduced_by_fix": false,
       "current_status": "fixed",
-      "note": "Verified: run_lane wraps the runner in `except Exception` (panel_review.py:315-319) and run() maps through safe() (panel_review.py:349-354). Selftest reproduces the missing-cmd KeyError as a soft per-lane error while the sibling lane still files.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "correctness/merge_ledger.py:panel-tally-poisons-ledger",
-      "claim": "panel_tally validates only that lane_tallies is a non-empty dict, never that each lane's VALUE is a dict, and it writes the ledger BEFORE the summary print. Feed it the kind of malformed JSON an LLM verifier actually produces ({\"lane_tallies\": {\"ollama\": 10}}) and it persists ledger[\"panel\"][\"0\"] = {\"ollama\": 10}, then dies with AttributeError at merge_ledger.py:486 -- and from then on render_report.py:114 raises AttributeError on EVERY run, so the loop can never produce its final report, and the corrupt state is in ledger.json, which is the one file this design commits to git.",
-      "evidence": {},
-      "severity": "major",
-      "region": "review-loop-tools/scripts/merge_ledger.py:460-488",
-      "introduced_by_fix": false,
-      "current_status": "fixed",
-      "note": "Verified by running: `{\"lane_tallies\": {\"ollama\": 10}}` exits 1 and leaves ledger.json byte-identical (merge_ledger.py:476-489, validation precedes both open()s). render_report.py:112-118 additionally skips non-dict rows and non-dict lanes.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "security/panel_review.py:prompt-fence-collision",
-      "claim": "build_prompt wraps the raw diff in a ```diff fence, so any diff that touches a markdown file closes the fence early and the remainder of the diff lands in the prompt as top-level text the model reads as instructions. This is not hypothetical: THIS round's own diff contains four such lines (round-0.diff:530,549,1164,1176), and the first one drops the panel-reviewer template's own instruction block ('Respond with ONLY this JSON object') plus a fake findings schema into the prompt at top level. Failure mode: degraded/echoed candidates that burn the lane's budget, and a prompt-injection channel where anyone who can add markdown to a diff can steer the panel reviewers.",
-      "evidence": {},
-      "severity": "major",
-      "region": "review-loop-tools/scripts/panel_review.py:116-134",
-      "introduced_by_fix": false,
-      "current_status": "fixed",
-      "note": "Verified: fenced() (panel_review.py:147-154) sizes the fence to max(4, longest backtick run + 1) over the whole payload and is applied to BOTH stat and diff; the diff block is prefixed with an explicit UNTRUSTED DATA instruction. Round-0's own markdown-fence diff no longer escapes.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "security/panel_review.py:consent-gate-by-lane-type",
-      "claim": "The remote-lane consent gate keys on the lane TYPE (`kind in (\"codex\",\"gemini\")`), not on whether the diff leaves the machine. Two of the four runners escape it: a `cmd` lane can shell out to any remote CLI, and the 'local' ollama lane talks to OLLAMA_URL, which is read straight from the OLLAMA_HOST environment variable -- a standard ollama setup for a shared GPU box. With OLLAMA_HOST=http://gpu.corp:11434 the whole private diff goes over the network while README.md:85 promises 'The local ollama lane sends nothing anywhere, which is its entire point' and CONTROLS.md:237 says 'nothing leaves the machine'. probe() makes this invisible: it prints the endpoint URL only in the FAILURE hint, so a working remote endpoint is reported as {\"installed\": true, \"auth\": \"none-needed\"} with no address at the consent gate.",
-      "evidence": {},
-      "severity": "major",
-      "region": "panel_review.py:55-57,296-301",
-      "introduced_by_fix": false,
-      "current_status": "fixed",
-      "note": "VERIFIED FIXED. is_loopback() now exact-matches 'localhost' or ipaddress.ip_address(host).is_loopback (panel_review.py:65-77); normalize_url() defaults a missing scheme (47-53). Ran the classifier over 22 hosts: 127.0.0.1.evil.com / 127.0.0.1.nip.io / 0177.0.0.1 / 2130706433 / 127.0.0.1@evil.com -> remote (gated); 127.0.0.1:11434, localhost:11434, [::1], 127.5.4.3, ::ffff:127.0.0.1, LOCALHOST -> local. Ambiguous forms ('::1' unbracketed, '127.1', OLLAMA_HOST='') fail CLOSED (gated as remote), which is the safe direction. probe() still names the endpoint unconditionally (169).",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "partial"
-        },
-        {
-          "round": 2,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "security/panel_review.py:cmd-lane-shell-from-tracked-config",
-      "claim": "run_cmd executes lane[\"cmd\"] with shell=True, and the new SKILL.md gitignore recipe explicitly TRACKS .review-loop/panel.json in git (`!panel.json`) while archive()'s KEEP set makes it survive every loop. So a panel.json that arrives with a clone, a branch, or a PR silently gets arbitrary shell executed on the reviewer's machine, unattended, the moment the orchestrator runs the panel step -- with the working directory set to the repo root and no gate, no allowlist and no disclosure anywhere in the setup prompt (SKILL.md:117 lists the lane schema as name/type/model/timeout_s/max_diff_tokens and never mentions the cmd type at all).",
-      "evidence": {},
-      "severity": "major",
-      "region": "panel_review.py:270-274,302-305",
-      "introduced_by_fix": false,
-      "current_status": "fixed",
-      "note": "VERIFIED FIXED. cmd_approved() (panel_review.py:85-96) requires cmd_lanes_approved to be a LIST containing the exact command string or its sha256; boolean/str/missing all return False (checked live). run_cmd executes lane['cmd'] (320) \u2014 the exact string that was hashed, no substitution in between \u2014 so a pulled panel.json that edits the command fails the gate. Lane with no cmd key is skipped, not KeyError. Legacy boolean consent breaks toward SKIP, the safe direction. Residual indirection filed separately as security/panel_review.py:cmd-consent-hash-covers-invocation-not-script.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "partial"
-        },
-        {
-          "round": 2,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "security/SKILL.md:panel-consent-travels-in-git",
-      "claim": "Remote-lane consent is stored as `consent.remote_lanes_approved: true` in panel.json, which the same change makes git-tracked and archive-persistent, and SKILL.md:122 states consent is 'per-repo, asked once'. Consequence: developer A's one-time approval is committed and then authorizes shipping developer B's private diffs to OpenAI/Google on B's machine, with no re-prompt, no record of who is running, and no expiry -- consent for a data-egress decision is being made by a file in the repo rather than by the human at the keyboard.",
-      "evidence": {},
-      "severity": "major",
-      "region": "review-loop-tools/skills/review-loop/SKILL.md:104-123",
-      "introduced_by_fix": false,
-      "current_status": "fixed",
-      "note": "Verified by running a scratch loop-dir whose panel.json contained consent:{remote_lanes_approved:true, cmd_lanes_approved:true}: both lanes were still skipped. load_consent() reads only <loop-dir>/panel-consent.json (panel_review.py:59-66); the SKILL.md gitignore allowlist (SKILL.md:88-97) lists !panel.json and NOT panel-consent.json, so `*` ignores it; merge_ledger KEEP retains it across archive.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "correctness/panel_review.py:extract-json-brace-scanner",
-      "claim": "extract_json finds the JSON object by counting raw { and } characters with no string-awareness, so an UNBALANCED brace inside any claim or evidence string (a code reviewer writing 'the closing } is missing' or quoting 'if (x) {') breaks the depth count and returns None even though the model emitted perfectly valid JSON. run_lane then reports the lane as 'no parseable candidates JSON' and the entire lane's cross-family signal -- the only reason the feature exists -- is discarded for that round.",
-      "evidence": {},
-      "severity": "major",
-      "region": "review-loop-tools/scripts/panel_review.py:136-155",
-      "introduced_by_fix": false,
-      "current_status": "fixed",
-      "note": "Verified: raw_decode-based scan (panel_review.py:177-197) parses a payload whose claim string contains 'quoting if (x) { here'; sanitize() still rejects non-dict/non-list shapes, so a junk first object cannot poison the lane.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "minor/merge_ledger.py:panel-tally-unguarded-json-load",
-      "claim": "merge_ledger.py's panel-tally command loads the panel-verifier's verified.json with a bare `json.load(fh)` and no exception handling; a malformed verified.json (e.g. the panel-verifier agent produced truncated or invalid JSON) crashes the merge step with an uncaught traceback instead of a clean, actionable error.",
-      "evidence": {},
-      "severity": "minor",
-      "region": "review-loop-tools/scripts/merge_ledger.py:460-488",
-      "source": "panel:ollama",
+      "source": "panel:codex",
       "sources": [
-        "panel:ollama"
+        "panel:codex"
       ],
-      "introduced_by_fix": false,
-      "current_status": "fixed",
-      "note": "VERIFIED FIXED. merge_ledger.py:471-481 wraps the open/parse in try/except (OSError, ValueError) \u2014 covers missing file, IsADirectoryError, JSONDecodeError and UnicodeDecodeError \u2014 prints a message naming vpath and exits 1 before any ledger write. Selftest asserts no traceback and an untouched ledger.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "open"
-        },
-        {
-          "round": 2,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "minor/panel_review.py:ollama-num-ctx-silent-clamp",
-      "claim": "The num_ctx fix sizes the context from the prompt but then clamps it with min(..., num_ctx_max default 65536) and says nothing when the clamp bites. A lane configured with max_diff_tokens above ~49k (the docstring advertises max_diff_tokens as a per-lane knob) produces a prompt that needs more than 65536 ctx, ollama silently drops the head of the prompt -- including the template's instructions and the diff stat -- and the lane result reports status ok with no warning. That is exactly the silent cap the comment at :208-210 claims to forbid, and the resulting garbage candidates are indistinguishable from a bad model.",
-      "evidence": {},
-      "severity": "minor",
-      "region": "review-loop-tools/scripts/panel_review.py:206-220",
-      "introduced_by_fix": false,
-      "fix_risk": "behavior: either the lane must start erroring/skipping or the result gains a truncation flag the verifier reads",
-      "current_status": "fixed",
-      "note": "Verified: run_ollama raises ValueError before any urlopen when need > num_ctx_max (panel_review.py:254-259); run_lane's except Exception turns it into a soft lane error carrying the remedy text.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "minor/panel_review.py:run-range-flag-unimplemented",
-      "claim": "The usage line documents `run <loop-dir> <round> [--range <a..b>]`, but run() reads only args[0] and args[1] and silently ignores every remaining argument -- there is no other occurrence of 'range' in the file. An orchestrator that follows the documented interface and passes --range gets no error and no diff materialization; the lanes review whatever briefs/round-<N>.diff happens to already be on disk, i.e. a stale round's diff, and the panel's findings are attributed to the wrong change.",
-      "evidence": {},
-      "severity": "minor",
-      "region": "review-loop-tools/scripts/panel_review.py:271-294",
-      "introduced_by_fix": false,
-      "fix_risk": "behavior: implementing --range makes run() materialize diffs it currently never touches",
-      "current_status": "fixed",
-      "note": "Verified by running `panel_review.py` with no args: prints exactly the two current usage lines ('probe [<panel.json>] [--smoke]' / 'run <loop-dir> <round>'), exit 2. The docstring line indices 4/5 match after the docstring grew.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "minor/panel_review.py:enabled-flag-unimplemented",
-      "claim": "The module docstring says run 'every enabled lane in parallel', but no lane field named enabled is ever read -- every lane in panel.json runs unconditionally. A user who disables a lane the obvious way (\"enabled\": false) still has it run; if it is a remote lane and consent was recorded once, the full diff is sent to OpenAI/Google after the user believed they had turned it off.",
-      "evidence": {},
-      "severity": "minor",
-      "region": "review-loop-tools/scripts/panel_review.py:233-244",
-      "introduced_by_fix": false,
-      "fix_risk": "behavior: honoring enabled changes which lanes run",
-      "current_status": "fixed",
-      "note": "Verified: run_lane returns status 'skipped', note 'disabled (enabled: false)' before makedirs/consent (panel_review.py:284-285); selftest asserts it.",
-      "first_seen_round": 0,
-      "status_history": [
-        {
-          "round": 0,
-          "status": "open"
-        },
-        {
-          "round": 1,
-          "status": "fixed"
-        }
-      ]
-    },
-    {
-      "id": "minor/panel_review.py:probe-smoke-diverges-from-run",
-      "claim": "probe --smoke did not exercise the invocation/model the run path uses, so a green setup gate did not mean the lane works (a model the account cannot access gates green, then fails every round).",
-      "evidence": {},
-      "severity": "minor",
-      "region": "review-loop-tools/scripts/panel_review.py:132-141",
-      "introduced_by_fix": false,
-      "fix_risk": "Threading the configured model into --smoke changes what the setup gate actually calls and can turn a currently-green gate red; it is user-visible probe behavior.",
-      "current_status": "partial",
-      "note": "CORE FIXED, ONE EDGE REMAINS -> BACKLOG. Verified: probe() now defaults to os.path.join('.review-loop','panel.json') when no arg (panel_review.py:140-141); the selftest drives the documented bare probe(['--smoke']) from a temp cwd and asserts the configured model 'o4-max' reached the real runner and codex.smoke=='ok' (panel_selftest.py:246-259); mutant probe-default-panel-path-reverted KILLED (errors 0). Secondary cwd divergence is moot in the documented path (probe from repo root => os.getcwd() == run's repo). REMAINING EDGE: on FIRST setup the documented order is probe THEN write panel.json (SKILL.md:111-120 \u2014 'To offer it: ... probe --smoke and present the available lanes ... Record the answer in TWO files'), so at probe time .review-loop/panel.json does not yet exist and the model the human just chose is still never smoked \u2014 exactly the failure the fix's own comment (panel_review.py:135-139) cites. The fix therefore only covers re-probes of an already-configured checkout. Cheap BACKLOG fix: one line in SKILL.md step 2b telling the orchestrator to re-run `probe --smoke` after writing panel.json (and have probe state in its output when it found no panel.json and is smoking CLI defaults).",
+      "note": "REJECTED as fixed. The no-.git half IS genuinely closed \u2014 verified end to end in a bare scratch dir: the run prints the refusal and the cmd lane is skipped, no pwned file (and PANEL_REVIEW_CONSENT_NO_GIT is NOT documented in SKILL.md, so it cannot leak into the agent workflow by copy-paste; the selftest only sets it in its own process env). But the SAME bundled-archive attack still succeeds whenever the export is unpacked ANYWHERE under an unrelated checkout, which is the common case ($HOME as a dotfiles repo, a monorepo, any workspace repo): git answers rc=1 'untracked' for the attacker's file, load_consent takes it as consent, and no opt-in is required. CONFIRMED live: scratch git init at victimrepo/, then victimrepo/downloaded-bundle/.review-loop/{panel.json with a cmd lane, panel-consent.json approving that exact string, briefs/round-0.*} \u2014 `panel_review.py run .review-loop 0` with the env var UNSET executed the shell and wrote /private/tmp/claude-501/pwned-r3.txt. So the stderr text and CONTROLS.md's 'Outside a git checkout the script fails CLOSED (a ZIP/`git archive` export keeps a force-added consent file)' overstate the guarantee: the export only fails closed if it is extracted outside every checkout. Root cause: git-tracked-ness of a file that SHIPS WITH THE PAYLOAD is not a trust boundary \u2014 'untracked' proves only 'not committed to whatever repo happens to be above', never 'created by this human on this machine'. The only closure is machine-local state the bundle cannot carry: keep consent OUT of the loop dir, e.g. ~/.config/panel-review/consent-<sha256 of the abs loop path>.json (or an HMAC in the in-loop file keyed by a home-dir secret). Until then the in-tree fail-closed cases are honest and the docs must not claim more than they deliver. | Round 4: FIXED - verified INDEPENDENTLY, not from the selftest. Replayed the bundled-archive repro in scratch against HEAD with the REAL ~/.config (no XDG override): (a) bundle unpacked UNDER an unrelated git checkout (git reports it '?? downloaded-bundle/', i.e. untracked - the exact round-3 fail-open) -> lane 'evil' status=skipped, marker file never created, rc=0; (b) no-.git bundle with a cmd lane AND a codex lane -> both skipped, no marker. The stderr hint names the CORRECT machine-local path: I recomputed sha256(realpath('.review-loop')) by hand and it matches the printed 00be8454...a0f4.json. consent_path is stable across absolute / trailing-slash / relative spellings (three spellings -> one identical path, checked by hand). Positive control: writing the printed file under an XDG override arms exactly the approved cmd string and still refuses the bundle's string (cmd/digest binding intact). No fail-OPEN path found: base comes from env/HOME and the key from realpath, neither of which the reviewed repo can influence; a missing, unreadable, directory-at-path, malformed, or non-object consent file all return {}. Mutants re-run by me: killed 6 survived 0 errors 0 mismatches 0, including legacy-inrepo-consent-honored and consent-path-keyed-by-basename. consent_git_status / in_git_worktree / PANEL_REVIEW_CONSENT_NO_GIT are gone from code, selftest and all four docs (grepped repo-wide: zero remnants). merge_ledger.py:444-450 KEEP change is coherent - KEEP means 'leave in the loop dir', so the legacy file stays put and keeps firing its hint instead of being swept to legacy/; nothing else special-cases it.",
       "first_seen_round": 0,
       "status_history": [
         {
@@ -277,24 +30,37 @@
         {
           "round": 2,
           "status": "partial"
+        },
+        {
+          "round": 3,
+          "status": "partial"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
         }
       ],
       "rejections": [
         {
-          "round": 2,
-          "reason": "panel_lane_for is never reached: SKILL.md:112 / CONTROLS.md:233 invoke `probe --smoke` with no panel.json path, so panel is None and the configured model is still not threaded."
+          "round": 3,
+          "reason": "no-.git case closed, but an untracked bundled consent inside ANY unrelated checkout is still honored \u2014 cmd lane executed in a live repro"
         }
       ]
     },
     {
-      "id": "architecture/panel_review.py:candidates-in-ledger-fragment-namespace",
-      "claim": "panel_review.py writes its non-ledger artifacts (round-<N>-<lane>.candidates.json, and the verifier's round-<N>-panel.verified.json) into fragments/, the directory the Stop hook polices as LEDGER fragments -- these filenames DO match subagent_guard's FRAGMENT_NAME regex, so the feature only works because ce34f74 patched the guard with a name exemption. That coupling is already broken in practice: the guard the hook actually executes comes from ${CLAUDE_PLUGIN_ROOT} (the installed plugin, highest cached version 0.10.0), no installed copy contains PANEL_NAME, and the exemption exists only in the unreleased 0.11.0 working tree. Observed live in this session: the Stop hook fired 'fragment .review-loop/fragments/round-0-ollama.candidates.json is invalid (finding <no id> missing id)'. Every panel round trips a false fragment-validation failure until the plugin cache is republished, and any future guard/panel version skew reintroduces it.",
+      "id": "correctness/panel_review.py:sanitize-unhashable-severity-typeerror",
+      "claim": "sanitize() evaluates `f.get(\"severity\") not in SEVERITIES` before checking severity's type; a candidate whose severity is a list or dict is unhashable and raises TypeError, discarding that lane's ENTIRE candidate batch instead of skipping the one malformed candidate.",
       "evidence": {},
-      "severity": "major",
-      "region": "review-loop-tools/scripts/panel_review.py:233-269",
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:321-332",
       "introduced_by_fix": false,
       "current_status": "fixed",
-      "note": "Verified: artifacts go to <loop>/fragments/panel/ (panel_review.py:288-291); PANEL_NAME is gone from subagent_guard.sh so the flat namespace is policed again (selftest asserts both directions -- panel subdir ignored, flat *.candidates.json blocks with exit 2); 'panel' as a listdir entry does not match FRAGMENT_NAME so the subdir is inert. agents/panel-verifier.md:21,23 and SKILL.md:166,227 name the new paths; grep finds no stale flat panel path anywhere in the plugin. Live .review-loop/fragments/ holds only seed.json + panel/.",
+      "source": "panel:codex",
+      "sources": [
+        "panel:codex"
+      ],
+      "note": "Region untouched by the round-2 diff; the pinning selftest checks still pass in the 76-check run. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "fix_risk": "changes the candidate-acceptance predicate in sanitize()",
       "first_seen_round": 0,
       "status_history": [
         {
@@ -304,17 +70,439 @@
         {
           "round": 1,
           "status": "fixed"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
         }
       ]
     },
     {
-      "id": "tests/panel_selftest.py:no-assertion-consent-not-read-from-panel-json",
-      "claim": "panel_selftest.py never asserts the security invariant behind the panel-consent-travels-in-git fix: no test writes consent into the git-tracked panel.json and asserts it is IGNORED. Every consent check in the suite passes trivially because panel-consent.json is simply absent, so re-adding a `panel.get('consent')` fallback to load_consent would leave all checks green while re-arming committed consent to authorize egress and shell on a cloned checkout.",
+      "id": "security/panel_review.py:ollama-proxy-egress-bypass",
+      "claim": "The ollama loopback consent gate classifies only the target hostname; urlopen honors HTTP(S)_PROXY, so a 'local' ollama request can be routed off-machine.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:89-107",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:codex",
+      "sources": [
+        "panel:codex"
+      ],
+      "note": "Still fixed after round 2: the NEW /api/show call added this round also goes through open_url (panel_review.py:450), so it inherits the loopback proxy bypass rather than opening a fresh direct-urlopen egress path. Re-grepped: no direct urlopen call sites remain outside open_url. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "concurrency/panel_review.py:cmd-timeout-orphans-children",
+      "claim": "run_cmd's timeout only killed the immediate shell; backgrounded children survived and kept making provider calls after the lane reported 'timeout'.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:510-529",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:codex",
+      "sources": [
+        "panel:codex"
+      ],
+      "note": "Region untouched by the round-2 diff; selftest grandchild-reap check still passes. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "security/panel_review.py:cli-lanes-retain-repo-read-access",
+      "claim": "run_codex invokes codex with cwd=repo and --sandbox read-only (permits filesystem reads), and run_gemini sets GEMINI_CLI_TRUST_WORKSPACE=true with cwd=repo \u2014 both retain real tool-level read access to the whole repository, contradicting the module docstring's 'Phase 1 is diff-only for every lane'. A prompt-injection payload smuggled in the reviewed diff could induce either CLI to read and leak unrelated repository files beyond the diff.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:379-430",
+      "introduced_by_fix": false,
+      "current_status": "wontfix",
+      "source": "panel:codex",
+      "sources": [
+        "panel:codex"
+      ],
+      "note": "ACCEPTED as wontfix on the merits for the codex half: codex exec exposes only --sandbox read-only|workspace-write|danger-full-access, none of which restricts READS, so the empty-jail cwd + scrubbed env really is the best available mitigation and the residual is now stated in the module docstring (panel_review.py:43-46) and CONTROLS.md (all three copies byte-identical, md5 ce2f49cb\u2026, asserted by the selftest). See the new docs finding: the shipped residual text names only codex and asserts 'no tighter flag exists today', which is false for the gemini lane. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "partial"
+        },
+        {
+          "round": 2,
+          "status": "partial"
+        },
+        {
+          "round": 3,
+          "status": "wontfix"
+        },
+        {
+          "round": 4,
+          "status": "wontfix"
+        }
+      ]
+    },
+    {
+      "id": "correctness/panel_review.py:ollama-num-ctx-estimate-imprecise",
+      "claim": "run_ollama's context-size estimate (need = len(prompt)/4*1.25 + 4096) is a heuristic based on ~4 chars/token, not a verified upper bound; Unicode-dense or heavily punctuated diffs can have a materially lower chars-per-token ratio, so a prompt can pass the `need > num_ctx_max` guard yet still exceed ollama's actual context \u2014 silently losing prompt content, which is exactly the failure the guard exists to prevent.",
       "evidence": {},
       "severity": "minor",
-      "region": "tests/panel_selftest.py:35-98",
-      "first_seen_round": 1,
+      "region": "review-loop-tools/scripts/panel_review.py:432-508",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:codex",
+      "sources": [
+        "panel:codex"
+      ],
+      "note": "FIXED at the bar I set in round 2 (a visible signal so a silently-ungated run is distinguishable): run_ollama:499-507 warns on stderr naming the model, the /api/show endpoint and 'silent-clamp guard inactive' whenever ollama_model_ctx returns None; the selftest asserts it and mutant ollama-inert-guard-warning-removed is KILLED (errors=0). Two residuals deliberately NOT filed: the signal lives on stderr only, so a caller that redirects stderr loses it (the lane JSON has no model_ctx key) \u2014 that was my own accepted alternative; and ollama_model_ctx's own 10s timeout is not derived from the lane timeout. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "fix_risk": "changes ollama num_ctx sizing/refusal for every local lane run",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "partial"
+        },
+        {
+          "round": 2,
+          "status": "partial"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "correctness/panel_review.py:severity-filter-case-sensitive",
+      "claim": "sanitize()'s severity filter was case-sensitive against a lowercase-only SEVERITIES set, silently dropping 'Major'/'Blocker'.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:321-332",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Region untouched by the round-2 diff; pinning checks still pass. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "correctness/panel_review.py:stat-read-no-errors-replace",
+      "claim": "build_prompt() read the .stat file with strict utf-8, so invalid bytes aborted prompt-building for that lane.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:217-230",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Region untouched by the round-2 diff; the b'\\xff' selftest check still passes. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "correctness/panel_review.py:run-unguarded-load-json",
+      "claim": "run() parses panel.json and panel-consent.json via bare load_json() with no try/except anywhere in the run path \u2014 unlike probe(), which was hardened to report 'unreadable' instead of crashing \u2014 so an empty, syntactically broken, or merge-conflict-marked panel.json or panel-consent.json at ROUND-EXECUTION time still crashes with a raw JSONDecodeError/traceback instead of failing gracefully.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:608-654",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "FIXED, verified independently: the round-2 repro (`printf '{\"lanes\": [\"codex\"]}' > panel.json; panel_review.py run .review-loop 0`) now exits 0 with a single status=skipped row noting 'lane entry is not an object (got str)' \u2014 no traceback from run_lane and none from safe()'s handler (panel_review.py:581-585, 683). Both mutants (run-lane-nondict-guard-removed, safe-handler-shape-assumption-restored) KILLED with errors=0. panel.json and panel-consent.json are both parsed under try/except in the run path now (run():648-655, load_consent():177-182). | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "partial"
+        },
+        {
+          "round": 2,
+          "status": "partial"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "security/panel_review.py:lane-name-path-traversal",
+      "claim": "The lane `name` from git-tracked panel.json was spliced unsanitized into the output path, so '../../../tmp/x' wrote outside fragments/panel/.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:534-558",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Still fixed after the sha-suffix change: the charset still strips dots and separators BEFORE the suffix is appended, and the selftest asserts safe_lane_name('../../x') fullmatches [A-Za-z0-9_-]+. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "correctness/panel_review.py:ollama-url-trailing-slash",
+      "claim": "OLLAMA_HOST with a trailing slash produced double-slash endpoints.",
+      "evidence": {},
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:52-68",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Still fixed; the new f\"{OLLAMA_URL}/api/show\" (panel_review.py:448) inherits the rstrip('/') normalization like the existing /api/tags and /api/generate f-strings. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "fix_risk": "changes the endpoint URL string sent to ollama",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "correctness/panel_review.py:codex-stale-last-message",
+      "claim": "run_codex read a leftover --output-last-message file from a prior interrupted run as the current run's candidates.",
+      "evidence": {},
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:389-415",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Re-verified now that the path is ABSOLUTE and the blocker is closed, so this code is live rather than dead: os.remove of the absolute out_file happens before codex runs (:398-399), and my stub run left exactly one fresh round-0-codex.last-message.txt behind. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "fix_risk": "changes which raw output a codex lane treats as the current run's result",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "correctness/render_report.py:sources-string-join",
+      "claim": "finding_line() joined a bare-string 'sources' character by character, or crashed on a non-iterable.",
+      "evidence": {},
+      "severity": "major",
+      "region": "review-loop-tools/scripts/render_report.py:33-40",
+      "introduced_by_fix": false,
+      "current_status": "fixed",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "render_report.py is untouched by the round-2 diff; the pinning selftest check still passes. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh).",
+      "first_seen_round": 0,
+      "status_history": [
+        {
+          "round": 0,
+          "status": "open"
+        },
+        {
+          "round": 1,
+          "status": "fixed"
+        },
+        {
+          "round": 2,
+          "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ]
+    },
+    {
+      "id": "correctness/panel_review.py:codex-out-file-relative-to-jail",
+      "claim": "The new empty-jail cwd breaks the codex lane end to end: --output-last-message is handed the RELATIVE path <loop>/fragments/panel/round-N-<lane>.last-message.txt but codex runs with cwd=<TemporaryDirectory jail>, so the file is written inside the jail and vanishes with it; every codex lane silently falls back to parsing the raw `codex exec` stdout transcript.",
+      "evidence": {},
+      "severity": "blocker",
+      "region": "review-loop-tools/scripts/panel_review.py:389-415",
       "introduced_by_fix": true,
+      "first_seen_round": 1,
       "status_history": [
         {
           "round": 1,
@@ -322,151 +510,418 @@
         },
         {
           "round": 2,
-          "status": "open"
+          "status": "fixed"
         },
         {
-          "round": 2,
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
           "status": "fixed"
         }
       ],
       "current_status": "fixed",
-      "note": "VERIFIED FIXED. The fixture panel.json now embeds consent in BOTH withdrawn shapes (nested `consent` object and top-level `remote_lanes_approved`/`cmd_lanes_approved`), and the cmd list holds the real sha256 of good_cmd plus the exact strings of the failcmd/tampered lanes (panel_selftest.py:56-66) \u2014 so any fallback flips the assertions rather than passing vacuously. Asserted at :87 (load_consent(loop) == {}) and end-to-end at :92 (good AND tampered still skipped). Mutation run confirms: mutant load-consent-panel-json-fallback-rearmed KILLED, errors 0, mismatches 0. Full suite rerun by me: ALL 36 CHECKS PASSED."
-    },
-    {
-      "id": "docs/CONTROLS.md:consent-design-not-propagated-to-mirror-copies",
-      "claim": "The repo-root CONTROLS.md and qa-loop-tools/CONTROLS.md were byte-identical PRE-FIX copies of review-loop-tools/CONTROLS.md, still documenting the withdrawn git-tracked-consent design ('panel.json records consent.remote_lanes_approved') that load_consent() deliberately ignores, and still promising 'ollama, nothing leaves the machine' with no OLLAMA_HOST caveat.",
-      "evidence": {},
-      "severity": "major",
-      "region": "CONTROLS.md:220-247",
-      "first_seen_round": 2,
-      "introduced_by_fix": true,
-      "status_history": [
-        {
-          "round": 2,
-          "status": "open"
-        },
-        {
-          "round": 2,
-          "status": "fixed"
-        }
+      "source": "panel:chair",
+      "sources": [
+        "panel:chair"
       ],
-      "current_status": "fixed",
-      "rejections": [],
-      "note": "VERIFIED FIXED by hash: all three copies now md5 46eca2faf37a65d0cff3d919e752bed9 (root, qa-loop-tools, review-loop-tools), matching the implementer's claim, and the shared text carries the untracked panel-consent.json design, the cmd_lanes_approved exact-string/digest list, the command-STRING-not-file-contents caveat, and the loopback OLLAMA_HOST caveat. find shows exactly three CONTROLS.md in the tree, so no fourth copy drifted. review-loop-tools/README.md:83-89 independently documents the untracked file correctly (it never mentions cmd lanes, so nothing to sync there)."
+      "note": "FIXED, verified two ways. (1) Independent repro in a scratch tree with a stub `codex` on PATH and a RELATIVE loop dir (`run .review-loop 0`): lane status ok, .review-loop/fragments/panel/round-0-codex.candidates.json written, stub confirms cwd is the jail and the handed path is absolute. (2) Mutant `codex-out-file-relative` (abspath reverted) KILLED by the new end-to-end check; mutate.py summary killed=5 survived=0 errors=0, so the kill count is trustworthy. Residual note, not a finding: the run leaves round-N-<lane>.last-message.txt behind in fragments/panel/ (harmless, subdir is unpoliced), and a REAL codex writing to an absolute path outside its read-only sandbox is still only assumed, never exercised. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh)."
     },
     {
-      "id": "security/panel_review.py:cmd-consent-hash-covers-invocation-not-script",
-      "claim": "cmd_approved() binds consent to the command STRING only, so an approved lane whose cmd invokes a git-tracked script (e.g. `bash tools/panel_lane.sh`) keeps its approval verbatim while the script's contents change under a git pull, branch switch or merged PR. Nothing at the consent prompt told the human that approving an indirect command also approves whatever that file becomes.",
+      "id": "correctness/panel_review.py:lane-name-collision",
+      "claim": "safe_lane_name() maps every disallowed character to '_' with no disambiguator, so two lanes whose names differ only in punctuation collide on one output base and the concurrently-running lanes silently overwrite each other's candidates.",
       "evidence": {},
       "severity": "minor",
-      "region": "review-loop-tools/scripts/panel_review.py:90-101",
-      "first_seen_round": 2,
+      "region": "review-loop-tools/scripts/panel_review.py:534-558",
       "introduced_by_fix": true,
+      "fix_risk": true,
+      "first_seen_round": 1,
       "status_history": [
         {
-          "round": 2,
+          "round": 1,
           "status": "open"
         },
         {
           "round": 2,
           "status": "fixed"
+        },
+        {
+          "round": 3,
+          "status": "fixed"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
         }
       ],
       "current_status": "fixed",
-      "rejections": [],
-      "note": "VERIFIED FIXED as scoped (doc-only was my own round-2 scoping). The caveat is present in all five places claimed: module docstring panel_review.py:34-37, SKILL.md:125-128 (explicitly at the consent prompt: 'Tell the human at the consent prompt'), and all three CONTROLS.md copies (identical md5). RESIDUAL, deliberately punted to BACKLOG: cmd_approved() still hashes only the invocation, so the technical exposure is unchanged \u2014 a human who approves `bash tools/lane.sh` still gets unattended execution of whatever that file becomes. BACKLOG item: hash the contents of any local file named in an approved cmd, or refuse cmds that reference repo-relative script paths."
+      "source": "panel:chair",
+      "sources": [
+        "panel:chair"
+      ],
+      "note": "FIXED as specified: sha256(raw)[:8] appended only when sanitizing CHANGED the name (panel_review.py:546-547), so 'codex'/'gemini' stay byte-identical and today's on-disk artifact names are unchanged. Collateral check done: no consumer parses a lane name back out of a filename \u2014 grep over scripts/, SKILL.md and agents/panel-verifier.md finds the verifier consuming the paths printed in run()'s candidates_files, and render_report's only glob is fragments/round-*-closeout.json (flat namespace, unaffected). Mutant `lane-name-no-suffix` KILLED. | Round 3: region untouched by the diff; all 82 selftest checks pass. | Round 4: region untouched by the diff; all 84 selftest checks pass (82 -> 84, hermetic via XDG_CONFIG_HOME into the tempdir - confirmed by reading panel_selftest.py:536-540 and the env= propagation in run_panel/sh)."
     },
     {
-      "id": "correctness/panel_review.py:probe-crash-on-malformed-panel-json",
-      "claim": "The new default panel path makes bare `panel_review.py probe [--smoke]` read .review-loop/panel.json unguarded, so a truncated or hand-edited panel.json aborts the setup gate with a raw json.decoder.JSONDecodeError traceback and a nonzero exit instead of reporting lane availability. Before this closeout, bare probe never touched the file and was immune; the gate is precisely where a human has just hand-written panel.json, so malformed JSON is the likely case, and the traceback names no remedy.",
-      "evidence": [
-        "review-loop-tools/scripts/panel_review.py:140-141",
-        "review-loop-tools/scripts/panel_review.py:64-68",
-        "review-loop-tools/scripts/panel_review.py:428-433"
-      ],
+      "id": "docs/CONTROLS.md:gemini-residual-understated",
+      "claim": "The round-3 residual paragraph (CONTROLS.md x3 and the module docstring) attributes the unrestricted-read exposure to codex alone \u2014 'codex's --sandbox read-only still permits absolute-path READS \u2026 no tighter codex sandbox flag exists today' \u2014 but run_gemini passes NO sandbox flag at all and the installed gemini CLI does expose one (`gemini --help` shows `-s, --sandbox  Run in sandbox?`). A reader of CONTROLS.md concludes the gemini lane is the safe one when it is the lane running entirely unsandboxed, and the sentence's 'no tighter flag exists' reads as covering both. Doc-only fix: name gemini explicitly and scope the 'no tighter flag' claim to codex (whether gemini's -s/--sandbox actually restricts reads is profile-dependent and SUSPECTED \u2014 do not wire it up on my say-so).",
+      "evidence": {},
       "severity": "minor",
-      "region": "review-loop-tools/scripts/panel_review.py:132-142",
+      "region": "review-loop-tools/CONTROLS.md:246-256",
       "first_seen_round": 3,
       "introduced_by_fix": true,
-      "fix_risk": "Swallowing the parse error changes probe's shipped output/exit status at the setup gate (silently smoking CLI defaults vs failing loudly), so the fix must print an explicit 'panel.json unreadable' row rather than fall back silently.",
       "status_history": [
         {
           "round": 3,
           "status": "open"
         },
         {
-          "round": 2,
+          "round": 4,
           "status": "fixed"
         }
       ],
       "current_status": "fixed",
-      "rejections": [],
-      "note": "CONFIRMED by execution: in a scratch dir containing .review-loop/panel.json = '{\"lanes\": [ broken', `python3 panel_review.py probe` exits nonzero with a full JSONDecodeError traceback (main() at :428-433 has no try). load_json (:64-68) only guards nonexistence, not malformed content. Fix: try/except around the default-path load, emit {\"panel\": \"unreadable: <err>\"} into the probe output and continue with panel=None. | RESOLVED (round 2): fixed post-loop in 5703e86: probe guards the default-path load, emits an 'unreadable' panel row, selftest check added (38 total)"
+      "source": "reviewer",
+      "sources": [
+        "reviewer"
+      ],
+      "note": "Doc-only; no behavior change. Closeout-eligible. | Round 4: FIXED at the bar I set - CONTROLS.md:259-261 (x3, md5-identical per the selftest's mirror check) and the module docstring now scope 'no tighter flag exists' to CODEX explicitly and name gemini's unverified -s/--sandbox, closing with 'for both lanes the empty jail, not a vendor sandbox, is the isolation' - a reader can no longer conclude the gemini lane is the sandboxed one."
     },
     {
-      "id": "tests/CONTROLS.md:mirror-sync-unenforced",
-      "claim": "HANDOFF.md:68-70 makes repo-root CONTROLS.md canonical and requires a manual cp-sync into both loop plugins, but nothing in the repo verifies it: no test, no guard script and no pre-commit check compares the three copies. That unenforced convention is exactly what produced the round-2 major (two of three copies shipped the withdrawn git-tracked-consent design for a full loop), and the closeout re-synced by hand without adding any guard, so the next doc edit drifts the same way.",
+      "id": "docs/SKILL.md:consent-path-verb-unusable-on-fresh-machine",
+      "claim": "SKILL.md's setup recipe writes consent to the path `consent-path` prints, but nothing created ~/.config/review-loop-tools/consent/, so the documented write fails with ENOENT on a fresh machine; the verb also accepted a nonexistent loop dir and printed a hash no run would ever read.",
+      "evidence": {},
+      "severity": "minor",
+      "fix_risk": true,
+      "region": "review-loop-tools/scripts/panel_review.py:163-180",
+      "first_seen_round": 4,
+      "introduced_by_fix": true,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ],
+      "current_status": "fixed",
+      "source": "reviewer",
+      "sources": [
+        "reviewer"
+      ],
+      "note": "CLOSEOUT VERIFIED: consent_path_cmd now os.makedirs(dirname(p), exist_ok=True) and exits 2 with a stderr explanation when the loop dir is absent (panel_review.py:171-180); selftest checks both (93/93 pass, verified writes land in the tempdir XDG, ~/.config/review-loop-tools untouched by the run). Documented order is safe: SKILL.md step 2 creates .review-loop/ledger.json before step 2b calls consent-path, so the new isdir() gate cannot break the scripted flow. Residual (NOT filed): makedirs can raise OSError (read-only or file-shaped $XDG_CONFIG_HOME) and would traceback instead of printing the path -- judged too marginal to file."
+    },
+    {
+      "id": "hygiene/version-strings-stale-at-0.11.0",
+      "claim": "plugin.json was bumped to 0.12.0 while SKILL.md:88 (the header written verbatim into every host repo's .gitignore) and README.md:71 stayed at 0.11.0.",
+      "evidence": {},
+      "severity": "minor",
+      "fix_risk": true,
+      "region": "review-loop-tools/skills/review-loop/SKILL.md:81-97",
+      "first_seen_round": 4,
+      "introduced_by_fix": true,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ],
+      "current_status": "fixed",
+      "source": "reviewer",
+      "sources": [
+        "reviewer"
+      ],
+      "note": "CLOSEOUT VERIFIED: both strings now read 0.12.0 and match plugin.json:3; the rewrite predicate at SKILL.md:81-86 still matches on the version-agnostic phrase 'an earlier \"Managed by review-loop-tools\" allowlist', so v0.11.0 .gitignore files stay upgradable. Repo-wide grep shows no other review-loop-tools 0.11.0 string except two intentionally historical ones (BACKLOG.md:3 dated entry, docs/proposal-*.md:4) plus the long-stale HANDOFF.md:9 snapshot (0.9.0, pre-existing, out of scope)."
+    },
+    {
+      "id": "security/panel_review.py:consent-xdg-inside-checkout",
+      "claim": "consent_path() honors XDG_CONFIG_HOME without checking it lies outside the reviewed checkout: a relative value resolves against the process cwd and an absolute value can point inside the repo, relocating the 'machine-local, repo-cannot-carry-it' consent store back under repo control, so a clone or unpacked bundle shipping the correctly hash-named consent file re-arms the bundled-archive egress/shell attack the round-4 consent redesign closed.",
       "evidence": [
-        "HANDOFF.md:68-70",
-        "CONTROLS.md:1",
-        "qa-loop-tools/CONTROLS.md:1",
-        "review-loop-tools/CONTROLS.md:1"
+        "review-loop-tools/scripts/panel_review.py:129-137"
+      ],
+      "severity": "major",
+      "region": "review-loop-tools/scripts/panel_review.py:114-137",
+      "first_seen_round": 4,
+      "introduced_by_fix": true,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        },
+        {
+          "round": 4,
+          "status": "partial"
+        }
+      ],
+      "current_status": "partial",
+      "source": "panel:codex",
+      "sources": [
+        "panel:codex"
+      ],
+      "note": "Panel final-pass finding, minted into the ledger at closeout. CLOSEOUT: RELATIVE half fixed and verified -- panel_review.py:130-134 ignores a non-absolute XDG_CONFIG_HOME, says so on stderr, falls back to ~/.config; selftest asserts both the fallback and the stderr line. PARTIAL: the second half of the panel's claim is untouched -- an ABSOLUTE XDG_CONFIG_HOME that resolves inside the reviewed checkout (e.g. XDG_CONFIG_HOME=<repo>/.config) is still accepted verbatim, so the consent store can still sit in a directory a clone/bundle populates. Verified by reading the code: the only test is os.path.isabs(). No iteration follows -- routes to BACKLOG. Cheap containment if picked up: reject a base whose realpath is under the loop dir's repo root (os.path.commonpath), same fail-to-~/.config treatment.",
+      "rejections": [
+        {
+          "round": 4,
+          "reason": "Claimed 'fixed' at closeout; only the relative-XDG half is closed -- an absolute XDG_CONFIG_HOME resolving inside the reviewed checkout is still accepted verbatim (panel_review.py:129-137), so the panel's claim is half-open."
+        }
+      ]
+    },
+    {
+      "id": "correctness/panel_review.py:lane-name-suffix-self-collision",
+      "claim": "safe_lane_name appended sha256(raw)[:8] only when sanitizing changed the name, so a raw lane name spelled exactly like another lane's sanitized output ('a_b-2e7336dc') passed through unchanged and both concurrent lanes wrote the same round-N candidates file, silently overwriting each other.",
+      "evidence": [
+        "review-loop-tools/scripts/panel_review.py:583"
       ],
       "severity": "minor",
-      "region": "review-loop-tools/tests/panel_selftest.py:1-30",
-      "first_seen_round": 3,
+      "region": "review-loop-tools/scripts/panel_review.py:567-586",
+      "first_seen_round": 4,
+      "introduced_by_fix": true,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ],
+      "current_status": "fixed",
+      "source": "panel:codex",
+      "sources": [
+        "panel:codex"
+      ],
+      "note": "Panel final-pass finding, minted at closeout. CLOSEOUT VERIFIED and the fix is provably complete, not just test-shaped: the suffix branch now also fires when raw matches -[0-9a-f]{8}$ (panel_review.py:583), so every suffixed output ends in '-<8 hex>' and every passthrough output by construction does not -- the two sets are disjoint, and residual collisions need a 32-bit sha256 prefix collision on names with identical 64-char sanitizations. Checked live: safe_lane_name('a.b')='a_b-2e7336dc', re-minted='a_b-2e7336dc-6e11865c'; 'codex'/'gemini' still byte-identical. Cosmetic side effect (not filed): a legit lane named e.g. 'gemini-deadbeef' now gets a suffixed artifact base -- harmless, since consumers read the 'candidates' path out of the run JSON (panel_review.py:650, 701) rather than reconstructing it."
+    },
+    {
+      "id": "correctness/panel_review.py:ollama-show-timeout-unbounded",
+      "claim": "ollama_model_ctx() defaulted to timeout=10 and run_ollama did not pass the lane timeout, so a lane configured at 1s could still block ~10s on the /api/show metadata call before generation started.",
+      "evidence": [
+        "review-loop-tools/scripts/panel_review.py:501",
+        "review-loop-tools/scripts/panel_review.py:462"
+      ],
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:462-501",
+      "first_seen_round": 4,
       "introduced_by_fix": false,
       "status_history": [
         {
-          "round": 3,
+          "round": 4,
           "status": "open"
         },
         {
-          "round": 2,
+          "round": 4,
           "status": "fixed"
         }
       ],
       "current_status": "fixed",
-      "rejections": [],
-      "note": "CONFIRMED: grep for 'CONTROLS.md' across all *.py and *.sh in the repo matches only nothing outside the docs themselves (commit_guard.sh does not check it), and `find -name CONTROLS.md` returns exactly the three copies. BACKLOG fix is three lines: assert md5(root) == md5(qa) == md5(review) in panel_selftest.py (or in commit_guard.sh, which already runs pre-commit). | RESOLVED (round 2): fixed post-loop in 5703e86: panel_selftest.py asserts md5 equality of all three CONTROLS.md copies"
+      "source": "panel:codex",
+      "sources": [
+        "panel:codex"
+      ],
+      "note": "Panel final-pass finding, minted at closeout. CLOSEOUT VERIFIED: run_ollama passes min(timeout, 10) (panel_review.py:501); selftest stubs open_url and asserts the /api/show call carries the lane's 3s. Two honest residuals, neither filed: worst-case lane wall time is now timeout + min(timeout,10) rather than timeout, and a very short lane timeout makes the metadata call fail -> model_ctx None -> the num_ctx clamp guard goes inert for that run (it does warn on stderr, covered by an existing check)."
+    },
+    {
+      "id": "correctness/render_report.py:sources-only-attribution-skipped",
+      "claim": "finding_line() gated the whole '- via <sources>' attribution on the singular 'source' key, so a finding carrying only a 'sources' list rendered with no provenance in REPORT.md.",
+      "evidence": [
+        "review-loop-tools/scripts/render_report.py:32-33"
+      ],
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/render_report.py:25-40",
+      "first_seen_round": 4,
+      "introduced_by_fix": false,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ],
+      "current_status": "fixed",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Panel final-pass finding, minted at closeout. CLOSEOUT VERIFIED by reading render_report.py:32-36: the gate is now `source or sources`, and `srcs = f.get('sources') or [f['source']]` cannot KeyError (the or-branch only runs when sources is falsy, which with the new gate implies source is truthy). Empty sources=[] with no source correctly renders no attribution line. Selftest asserts 'via codex+gemini' for a sources-only finding."
+    },
+    {
+      "id": "correctness/panel_review.py:severity-out-of-vocabulary-dropped",
+      "claim": "sanitize() dropped any candidate whose severity string was outside {blocker,major,minor}, so a lane emitting 'warning'/'critical'/'info' lost real findings silently instead of having them clamped.",
+      "evidence": [
+        "review-loop-tools/scripts/panel_review.py:377-382"
+      ],
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:370-385",
+      "first_seen_round": 4,
+      "introduced_by_fix": false,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        },
+        {
+          "round": 4,
+          "status": "fixed"
+        }
+      ],
+      "current_status": "fixed",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Panel final-pass finding, minted at closeout. CLOSEOUT VERIFIED for the claim as written: a non-empty out-of-vocabulary STRING now clamps to 'minor' (panel_review.py:377-381); checked live, sanitize() files {'severity':'Warning'} as minor. The adjacent missing/non-string case is still a silent drop and is filed separately as correctness/panel_review.py:severity-missing-still-dropped."
+    },
+    {
+      "id": "correctness/panel_review.py:severity-missing-still-dropped",
+      "claim": "sanitize() still silently discards any candidate whose 'severity' key is absent, blank, or non-string (sev normalizes to '' and falls through the `continue`), even when claim and evidence are well-formed -- the same silent-loss failure the closeout just fixed for out-of-vocabulary severity STRINGS, and the most common shape of LLM sloppiness. The lane then reports filed:0 with no diagnostic anywhere, so a lane that found real issues looks like a lane that found nothing.",
+      "evidence": [
+        "review-loop-tools/scripts/panel_review.py:375-382"
+      ],
+      "severity": "minor",
+      "fix_risk": true,
+      "region": "review-loop-tools/scripts/panel_review.py:370-385",
+      "first_seen_round": 4,
+      "introduced_by_fix": false,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        }
+      ],
+      "current_status": "open",
+      "source": "reviewer",
+      "sources": [
+        "reviewer"
+      ],
+      "note": "CONFIRMED live at closeout: sanitize({'findings':[{'claim':'c','evidence':['a:1']}]}) -> filed 0; same for severity:2 and severity:'  '. The closeout's own rationale ('the verifier adjudicates severity anyway') applies identically here, so the fix is internally inconsistent. fix_risk: clamping would change what reaches the verifier. No iteration follows -- routes to BACKLOG."
+    },
+    {
+      "id": "correctness/panel_review.py:consent-key-case-sensitive",
+      "claim": "consent_path()'s key is sha256(os.path.realpath(loop)) with no case folding, so on case-insensitive-but-case-preserving filesystems (default macOS APFS, NTFS) the same loop directory spelled with different casing hashes to two different consent files, producing spurious 'no consent, lanes skipped' and duplicate consent files.",
+      "evidence": [
+        "review-loop-tools/scripts/panel_review.py:136"
+      ],
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:114-137",
+      "first_seen_round": 4,
+      "introduced_by_fix": false,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        },
+        {
+          "round": 4,
+          "status": "wontfix"
+        }
+      ],
+      "current_status": "wontfix",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Panel final-pass finding, minted at closeout; implementer declined and the argument HOLDS. Case-folding the key would make consent recorded for /repo/A also authorize /repo/a, which on a case-SENSITIVE filesystem (ext4, case-sensitive APFS volumes) are genuinely different loop dirs -- i.e. the cheap fix trades a fail-closed nuisance for a fail-open grant of remote-egress/shell consent. Today's failure mode is a consent miss with lanes skipped and a stderr line naming the consent-path verb, which is recoverable in one command. Any real fix must be filesystem-capability-aware (probe case-insensitivity of the loop dir's volume), which is not worth the surface. Routes to BACKLOG as documentation, not as work."
+    },
+    {
+      "id": "portability/panel_review.py:killpg-windows-attributeerror",
+      "claim": "run_cmd's timeout path calls os.killpg, which does not exist on Windows, and AttributeError is not in the contextlib.suppress allowlist -- a cmd-lane timeout on Windows raises instead of killing the process group, so the lane reports status=error (caught by run_lane's broad except) and the shell's children are left running.",
+      "evidence": [
+        "review-loop-tools/scripts/panel_review.py:557-560"
+      ],
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:543-562",
+      "first_seen_round": 4,
+      "introduced_by_fix": false,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        }
+      ],
+      "current_status": "open",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Panel final-pass finding (verifier demoted major->minor: blast radius is one lane, not the script), minted at closeout, NOT actioned by the closeout. CONFIRMED by reading panel_review.py:557-560: suppress covers only ProcessLookupError/PermissionError, and start_new_session is also POSIX-only. Windows is de facto unsupported for cmd lanes; the whole tool is otherwise POSIX-shaped (shell=True quoting, ~/.config). Routes to BACKLOG -- fix is one line (guard on hasattr(os,'killpg') else p.kill()) if Windows support is ever claimed."
+    },
+    {
+      "id": "correctness/panel_review.py:run-status-shape-lacks-lanes",
+      "claim": "run() prints three different top-level JSON shapes and exits 0 for all of them: {status: panel-unreadable|no-panel, note} carries no 'lanes' key, so a caller that reads ['lanes'] off a zero-exit run crashes with KeyError instead of seeing a skipped panel.",
+      "evidence": [
+        "review-loop-tools/scripts/panel_review.py:663-676",
+        "review-loop-tools/scripts/panel_review.py:699-701"
+      ],
+      "severity": "minor",
+      "region": "review-loop-tools/scripts/panel_review.py:652-701",
+      "first_seen_round": 4,
+      "introduced_by_fix": false,
+      "status_history": [
+        {
+          "round": 4,
+          "status": "open"
+        }
+      ],
+      "current_status": "open",
+      "source": "panel:gemini",
+      "sources": [
+        "panel:gemini"
+      ],
+      "note": "Panel final-pass finding (verifier demoted major->minor for lack of a demonstrated crashing caller), minted at closeout, NOT actioned. CONFIRMED the three-way shape split by reading the code; also confirmed no in-repo caller indexes ['lanes'] unconditionally -- panel_selftest.py branches on status first, and the only other consumer is the SKILL.md orchestrator LLM. Real cost is contract drift for any future scripted consumer. Routes to BACKLOG; a one-key fix ('lanes': []) in both early-return dicts would make the shape total."
     }
   ],
-  "scope": "pre-multi-provider-panel..HEAD",
-  "panel": {
-    "0": {
-      "ollama": {
-        "filed": 10,
-        "confirmed": 0,
-        "demoted": 1,
-        "rejected": 9
-      }
-    },
-    "final": {
-      "ollama": {
-        "filed": 10,
-        "confirmed": 0,
-        "demoted": 0,
-        "rejected": 10
-      }
-    }
-  },
   "usage": {
     "0": {
-      "reviewer": 77456,
-      "panel-verifier": 90004
+      "reviewer": 24815
     },
     "1": {
-      "implementer": 95013,
-      "reviewer": 67036
+      "implementer": 76192,
+      "reviewer": 61461
     },
     "2": {
-      "implementer": 92330,
-      "reviewer": 97145,
-      "panel-verifier": 64683
+      "implementer": 80056,
+      "reviewer": 71909
+    },
+    "3": {
+      "implementer": 60407,
+      "reviewer": 58996
+    },
+    "4": {
+      "implementer": 111973,
+      "reviewer": 125595,
+      "panel-verifier": 86214
     }
   },
   "round_shas": {
-    "1": "9a029145ed2e1d9f7254627caf53d934214285df",
-    "2": "f6a99362b2004d1f93f420f42534c784d8620457"
+    "1": "0202fb8670b0be3c8a36e944fd4a7065b82254f1",
+    "2": "5f8b1a6e794bee7bc374dd9ffc281996977ad8c7",
+    "3": "47fe2a79bb45d0b1d95ec5d791e5cdbd0a484952",
+    "4": "0c4258c6f3b83497584442cb59e7b0cbc32970b0"
+  },
+  "panel": {
+    "final": {
+      "codex": {
+        "filed": 4,
+        "confirmed": 3,
+        "demoted": 0,
+        "rejected": 1
+      },
+      "gemini": {
+        "filed": 8,
+        "confirmed": 3,
+        "demoted": 2,
+        "rejected": 3
+      }
+    }
   }
 }

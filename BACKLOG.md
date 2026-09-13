@@ -1,5 +1,14 @@
 # Backlog
 
+## From review loop 2026-09-12/13 (REVIEW.md seed — panel hardening, v0.12.0)
+
+- **XDG consent store can still be relocated INTO the checkout by an absolute path** (`security/panel_review.py:consent-xdg-inside-checkout`, MAJOR, partial after closeout). The closeout closed the relative-`XDG_CONFIG_HOME` vector, but `consent_path()` tests only `os.path.isabs()` — an absolute `XDG_CONFIG_HOME` pointing inside the reviewed checkout relocates the "machine-local" consent store back under repo control, re-arming the bundled-archive attack. Closure idea: reject an XDG base whose realpath is inside the loop's repo (or any ancestor of the loop dir), falling back to ~/.config with a warning.
+- **Missing/blank/non-string severity still silently dropped** (`correctness/panel_review.py:severity-missing-still-dropped`, minor, fix_risk). `sanitize()` now clamps unknown severity *strings* to minor, but a candidate with no `severity` key at all is still dropped with claim+evidence intact and no diagnostic — internally inconsistent with the clamp rationale.
+- **`os.killpg` on cmd-lane timeout raises AttributeError on Windows** (`panel:codex`/gemini fold-in, minor, open). Not in the suppress list; run_lane's broad handler contains it to one lane, but the lane reports a confusing error instead of a clean timeout on Windows.
+- **`run()`'s no-panel/unreadable-panel output lacks a `lanes` key** (fold-in, minor, open). Three-way schema inconsistency between run()'s error shapes and its success shape; no in-repo caller crashes today, but external parsers of run output may.
+- **Consent key case-fold on APFS** (wontfix, documented). Differently-cased spellings of the same loop dir hash to different consent keys → spurious fail-closed consent misses on case-insensitive filesystems. Deliberately NOT case-folded: folding would grant cross-loop consent on case-sensitive filesystems; a correct fix needs per-path FS case-sensitivity probing (design-sized).
+- **Lane wall-time can reach timeout + min(timeout,10)** (noted, unfiled). ollama_model_ctx's metadata call budget is additive to the generate budget.
+
 ## From review loop 2026-09-09 (scope pre-multi-provider-panel..HEAD — multi-provider panel, v0.11.0)
 
 - **probe smoke still misses the configured model on FIRST setup** (`minor/panel_review.py:probe-smoke-diverges-from-run`, partial after closeout). The bare-`probe --smoke` default path fix covers re-probes, but SKILL.md's setup order runs probe *before* panel.json is written, so the model the human just chose is never smoked on first setup. Reviewer's note: reorder the setup recipe (write panel.json, then smoke) or add a post-config smoke step.
