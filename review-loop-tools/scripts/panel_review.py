@@ -303,8 +303,14 @@ def run_gemini(lane, prompt, repo, timeout):
     cmd = ["gemini"]
     if lane.get("model"):
         cmd += ["-m", lane["model"]]
+    # gemini-cli >= 0.59 refuses non-interactive runs in an untrusted
+    # directory. The lane uses gemini as a pure text generator on a prompt
+    # we feed it — it needs no workspace tool access — so trusting the
+    # workspace for THIS subprocess only is safe and keeps the lane
+    # non-interactive.
+    env = dict(os.environ, GEMINI_CLI_TRUST_WORKSPACE="true")
     r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                       timeout=timeout, cwd=repo)
+                       timeout=timeout, cwd=repo, env=env)
     return r.stdout, r
 
 def run_ollama(lane, prompt, repo, timeout):
