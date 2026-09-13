@@ -44,7 +44,8 @@ run_ollama warns on stderr when /api/show yields no trained context (the
 clamp guard must never go inert silently).
 
 Round-4 additions: consent is MACHINE-LOCAL (XDG_CONFIG_HOME — this
-selftest points it at its tempdir, keeping every check hermetic): an
+selftest points it at its own tempdir, a SIBLING of the fixture tree,
+keeping every check hermetic): an
 in-repo panel-consent.json authorizes NOTHING whether tracked, untracked,
 or outside any checkout, and earns the migration hint naming the real
 path; the bundled-archive attack (export shipping panel.json cmd lane +
@@ -52,6 +53,13 @@ matching consent) fails closed end to end both UNDER an unrelated git
 checkout and with no .git anywhere; consent_path is stable across
 relative/absolute spellings of the loop dir; the consent-path verb prints
 the machine-local file.
+
+Post-closeout addition: an ABSOLUTE XDG_CONFIG_HOME that resolves INSIDE
+the reviewed repo (repo-shipped env: .envrc, devcontainer, a Makefile
+export) is rejected — the bundled-archive attack armed with an in-checkout
+.config consent store fails closed end to end, a symlink alias of an
+in-repo base is caught (realpath both sides), and an out-of-repo absolute
+base is still honored.
 """
 import contextlib, hashlib, io, json, os, re, shlex, shutil, subprocess, sys
 import tempfile, time
@@ -129,10 +137,14 @@ def write_consent(loop, data):
 
 def main():
     td = tempfile.mkdtemp(prefix="panel-selftest-")
-    # Consent is machine-local under XDG_CONFIG_HOME — point it INTO the
+    # Consent is machine-local under XDG_CONFIG_HOME — point it at its OWN
     # tempdir so every consent the selftest writes or refuses is hermetic
-    # (never the developer's real ~/.config store).
-    os.environ["XDG_CONFIG_HOME"] = os.path.join(td, "xdg-config")
+    # (never the developer's real ~/.config store). A SIBLING of td, never
+    # inside it: consent_path rejects an XDG base under the reviewed repo
+    # root (dirname of the loop dir), and td IS that root for the main
+    # fixture loop — an in-td base would silently fall back to ~/.config.
+    xdg_td = tempfile.mkdtemp(prefix="panel-selftest-xdg-")
+    os.environ["XDG_CONFIG_HOME"] = xdg_td
     try:
         loop, good_cmd = make_loop(td)
 
@@ -815,6 +827,62 @@ def main():
         finally:
             os.environ["XDG_CONFIG_HOME"] = hermetic_xdg
 
+        # ================= XDG-inside-repo guard =========================
+
+        # The hermetic override itself proves the positive case: an
+        # ABSOLUTE base outside the reviewed repo is honored verbatim.
+        ok(pr.consent_path(loop).startswith(xdg_td),
+           "out-of-repo absolute XDG_CONFIG_HOME is honored")
+
+        # --- an ABSOLUTE XDG_CONFIG_HOME resolving INSIDE the reviewed
+        # checkout is rejected: repo-shipped env (.envrc, devcontainer, a
+        # Makefile exporting XDG_CONFIG_HOME=$PWD/.config) must not hand
+        # the 'machine-local' store back to files the bundle itself
+        # carries. The bundle ships panel.json (cmd lane) + a PRE-ARMED
+        # consent store at .config/review-loop-tools/consent/<hash>.json
+        # approving that exact command — the lane must still be SKIPPED
+        # and the command never executed. ---
+        xroot = os.path.join(td, "xdg-attack")
+        marker3 = os.path.join(td, "pwned-xdg")
+        make_bundle(xroot, marker3)
+        xloop = os.path.join(xroot, ".review-loop")
+        evil_base = os.path.join(xroot, ".config")
+        key = hashlib.sha256(
+            os.path.realpath(xloop).encode("utf-8")).hexdigest()
+        armed = os.path.join(evil_base, "review-loop-tools", "consent",
+                             key + ".json")
+        os.makedirs(os.path.dirname(armed))
+        # The in-loop panel-consent.json make_bundle ships approves the
+        # evil cmd — the armed store is that same content at the exact
+        # path consent_path would compute for an in-checkout base.
+        shutil.copy(os.path.join(xloop, "panel-consent.json"), armed)
+        r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "run", ".review-loop", "0"], cwd=xroot,
+               env=dict(os.environ, XDG_CONFIG_HOME=evil_base))
+        lanes = {l["lane"]: l for l in json.loads(r.stdout)["lanes"]}
+        ok(r.returncode == 0 and lanes["evil"]["status"] == "skipped"
+           and not os.path.exists(marker3),
+           "in-checkout XDG_CONFIG_HOME + pre-armed consent store fails "
+           "closed (cmd never executed)")
+        ok("resolves inside the reviewed repo" in r.stderr,
+           "in-checkout XDG_CONFIG_HOME rejection is called out on stderr")
+
+        # --- symlink alias: a base OUTSIDE the repo that RESOLVES inside
+        # it is rejected too (realpath on both sides) ---
+        sneaky = os.path.join(xdg_td, "sneaky-link")
+        os.symlink(evil_base, sneaky)
+        buf = io.StringIO()
+        try:
+            os.environ["XDG_CONFIG_HOME"] = sneaky
+            with contextlib.redirect_stderr(buf):
+                p_link = pr.consent_path(xloop)
+        finally:
+            os.environ["XDG_CONFIG_HOME"] = hermetic_xdg
+        ok(p_link.startswith(os.path.expanduser("~/.config"))
+           and "resolves inside the reviewed repo" in buf.getvalue(),
+           "symlinked-into-repo XDG_CONFIG_HOME rejected "
+           "(realpath both sides)")
+
         # --- safe_lane_name: a sanitized output re-minted as a raw lane
         # name must not collide with the original's output base ---
         ok(pr.safe_lane_name(pr.safe_lane_name("a.b"))
@@ -871,6 +939,7 @@ def main():
         print(f"\nALL {PASS} CHECKS PASSED")
     finally:
         shutil.rmtree(td, ignore_errors=True)
+        shutil.rmtree(xdg_td, ignore_errors=True)
 
 if __name__ == "__main__":
     main()

@@ -27,9 +27,9 @@ deliberately OUTSIDE the Stop hook's flat ledger-fragment scan.) A lane that
 times out, errors, or lacks consent is SKIPPED with a note — the panel never
 blocks a round. Consent is MACHINE-LOCAL state the reviewed repo cannot
 carry: it lives at $XDG_CONFIG_HOME/review-loop-tools/consent/<sha256 of the
-loop dir's realpath>.json (XDG_CONFIG_HOME defaults to ~/.config; the
-consent-path verb prints the exact file), written by the human at the setup
-gate. NOTHING inside the repo may authorize egress or shell: panel.json
+loop dir's realpath>.json (XDG_CONFIG_HOME defaults to ~/.config and is
+honored only when absolute AND outside the reviewed repo; the consent-path
+verb prints the exact file), written by the human at the setup gate. NOTHING inside the repo may authorize egress or shell: panel.json
 travels in git, and an in-repo panel-consent.json — cloned, force-added, or
 shipped inside a ZIP/`git archive`/cp -r bundle unpacked anywhere — is
 IGNORED with a stderr hint. Lanes whose
@@ -121,17 +121,32 @@ def consent_path(loop):
     reads as untracked). So consent lives under the user's config dir, keyed
     by the sha256 of the loop dir's realpath (realpath so relative
     invocations and symlink aliases resolve to one file). XDG_CONFIG_HOME is
-    honored only when ABSOLUTE: a relative value resolves against the
-    process cwd — i.e. potentially inside the reviewed checkout — which
-    would hand the 'machine-local' store back to whatever a clone or
-    unpacked bundle carries, re-arming exactly the attack this path
-    exists to close."""
+    honored only when ABSOLUTE and OUTSIDE the reviewed repo: a relative
+    value resolves against the process cwd — i.e. potentially inside the
+    reviewed checkout — and an absolute value pointing into the checkout
+    (repo-shipped env is a real vector: a direnv .envrc, a devcontainer, a
+    Makefile exporting XDG_CONFIG_HOME=$PWD/.config) hands the
+    'machine-local' store back to whatever a clone or unpacked bundle
+    carries, re-arming exactly the attack this path exists to close. The
+    repo root is dirname(realpath(loop)) — the loop dir lives at
+    <repo>/.review-loop by convention, no git needed — and both sides are
+    realpath'd so a symlink alias of an in-repo dir cannot slip past.
+    Rejection falls back to ~/.config: worst case is a consent miss and
+    skipped lanes, never fail-open."""
     base = os.environ.get("XDG_CONFIG_HOME")
     if base and not os.path.isabs(base):
         print(f"panel_review: ignoring relative XDG_CONFIG_HOME ({base!r}) — "
               f"consent must live outside any checkout; using ~/.config",
               file=sys.stderr)
         base = None
+    if base:
+        repo_root = os.path.dirname(os.path.realpath(loop))
+        if os.path.commonpath([os.path.realpath(base), repo_root]) == repo_root:
+            print(f"panel_review: ignoring XDG_CONFIG_HOME ({base!r}) — it "
+                  f"resolves inside the reviewed repo ({repo_root}), where a "
+                  f"clone or unpacked bundle could ship a pre-armed consent "
+                  f"store; using ~/.config", file=sys.stderr)
+            base = None
     base = base or os.path.expanduser("~/.config")
     key = hashlib.sha256(os.path.realpath(loop).encode("utf-8")).hexdigest()
     return os.path.join(base, "review-loop-tools", "consent", key + ".json")
