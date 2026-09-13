@@ -256,9 +256,13 @@ when the CLIs exist.*
   env (no workspace to discover), but codex's `--sandbox read-only` still
   permits absolute-path READS — a prompt injection in the reviewed diff
   that already names a path could read (never write) files outside the
-  diff; no tighter codex sandbox flag exists today (gemini ships a
-  `-s/--sandbox` flag whose semantics we have not verified or adopted —
-  for both lanes the empty jail, not a vendor sandbox, is the isolation).
+  diff; no tighter codex sandbox flag exists today. gemini's
+  `-s/--sandbox` flag was VERIFIED (2026-09-13, gemini-cli 0.59.0, macOS
+  Seatbelt) not to help: an absolute-path read succeeded under the default
+  `permissive-open` profile AND under `restrictive-open`, and
+  `restrictive-closed` blocks the API egress the lane exists to make — so
+  the flag is not adopted, and for both lanes the empty jail, not a vendor
+  sandbox, is the isolation.
 - **Flood control and measurement** `[review]` — each lane files at most 10
   candidates by confidence; the report's Panel section shows per-lane
   filed/confirmed/demoted/rejected, and that kept-rate is the drop-or-keep

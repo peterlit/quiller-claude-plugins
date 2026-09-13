@@ -49,9 +49,13 @@ not the repo — codex/gemini run in an empty scratch cwd with a scrubbed env
 so their file tools have no workspace to read, and loopback ollama traffic
 bypasses HTTP(S)_PROXY so "local" cannot silently route off-machine.
 KNOWN RESIDUAL: codex's --sandbox read-only still permits ABSOLUTE-path
-reads (no tighter codex flag exists today; gemini ships a -s/--sandbox flag
-whose semantics we have not verified or adopted — for both lanes the empty
-jail, not a vendor sandbox, is the isolation), so the jail removes workspace
+reads (no tighter codex flag exists today; gemini's -s/--sandbox flag was
+VERIFIED 2026-09-13 with gemini-cli 0.59.0 on macOS Seatbelt not to
+restrict reads under any profile that keeps API egress — permissive-open
+and restrictive-open both allowed an absolute-path canary read, while
+restrictive-closed blocks the API call itself — so the flag is not
+adopted, and for both lanes the empty jail, not a vendor sandbox, is the
+isolation), so the jail removes workspace
 DISCOVERY, not read capability — a prompt injection in the reviewed diff
 that already knows a path could read (never write) files outside the diff. Candidates carry no IDs and no
 status — the panel-verifier
