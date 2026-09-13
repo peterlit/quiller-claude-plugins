@@ -14,13 +14,27 @@ panel.json with an "unreadable" row instead of a traceback, panel-tally
 shape AND JSON-parse validation, render_report tolerance of a poisoned
 panel row, the subagent guard's flat-vs-panel-subdir behavior, and the
 three CONTROLS.md copies staying byte-identical (HANDOFF.md cp-sync).
+
+Round-1 panel-hardening additions: a git-TRACKED panel-consent.json is
+refused (force-add attack); loopback ollama traffic bypasses HTTP(S)_PROXY
+(open_url); run() survives malformed panel.json/panel-consent.json
+(fail-closed, no traceback); cmd-lane timeout kills the whole process
+GROUP; codex/gemini run jailed in an empty scratch cwd; codex never reads
+a stale .last-message.txt; lane names from panel.json are sanitized before
+path splice; sanitize() normalizes severity case and skips (not crashes
+on) unhashable severities; the .stat read tolerates invalid UTF-8;
+ollama_need is byte-aware and run_ollama re-checks prompt_eval_count;
+normalize_url strips trailing slashes; render_report tolerates a
+bare-string 'sources'.
 """
-import contextlib, hashlib, io, json, os, re, shutil, subprocess, sys, tempfile
+import contextlib, hashlib, io, json, os, re, shlex, shutil, subprocess, sys
+import tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "scripts")
 sys.path.insert(0, SCRIPTS)
 import panel_review as pr                                    # noqa: E402
+import render_report as rr                                   # noqa: E402
 
 PASS = 0
 def ok(cond, label):
@@ -179,7 +193,7 @@ def main():
                                   "model": "o4-max"}]}, fh)
         seen.clear()
         real_run, real_which = pr.subprocess.run, pr.shutil.which
-        real_open = pr.urllib.request.urlopen
+        real_open = pr.open_url
         cwd, buf = os.getcwd(), io.StringIO()
 
         def _no_daemon(*a, **kw):
@@ -189,7 +203,7 @@ def main():
             pr.shutil.which = lambda n: "/fake/codex" if n == "codex" else None
             pr.subprocess.run = lambda *a, **kw: type(
                 "R", (), {"returncode": 0, "stdout": "logged in", "stderr": ""})()
-            pr.urllib.request.urlopen = _no_daemon
+            pr.open_url = _no_daemon
             os.chdir(proot)
             with contextlib.redirect_stdout(buf):
                 pr.probe(["--smoke"])
@@ -197,7 +211,7 @@ def main():
             os.chdir(cwd)
             pr.RUNNERS["codex"] = real
             pr.subprocess.run, pr.shutil.which = real_run, real_which
-            pr.urllib.request.urlopen = real_open
+            pr.open_url = real_open
         probe_out = json.loads(buf.getvalue())
         ok(seen.get("model") == "o4-max"
            and probe_out["codex"]["smoke"] == "ok"
@@ -212,16 +226,16 @@ def main():
             fh.write('{"lanes": [ broken')
         cwd, buf = os.getcwd(), io.StringIO()
         real_which = pr.shutil.which
-        real_open = pr.urllib.request.urlopen
+        real_open = pr.open_url
         try:
             pr.shutil.which = lambda n: None
-            pr.urllib.request.urlopen = _no_daemon
+            pr.open_url = _no_daemon
             os.chdir(broot)
             with contextlib.redirect_stdout(buf):
                 pr.probe([])
         finally:
             os.chdir(cwd)
-            pr.shutil.which, pr.urllib.request.urlopen = real_which, real_open
+            pr.shutil.which, pr.open_url = real_which, real_open
         probe_out = json.loads(buf.getvalue())
         ok(probe_out.get("panel", "").startswith("unreadable"),
            "probe reports malformed panel.json instead of crashing")
@@ -284,6 +298,187 @@ def main():
         r = sh(["bash", g, gl], input="{}")
         ok(r.returncode == 2,
            "guard polices flat *.candidates.json again (exemption removed)")
+
+        # ================= round-1 panel hardening =======================
+
+        # --- normalize_url strips trailing slashes (no //api/generate) ---
+        ok(pr.normalize_url("http://h:11434/") == "http://h:11434"
+           and pr.normalize_url("h:11434/") == "http://h:11434",
+           "normalize_url strips trailing slash, scheme-less form included")
+
+        # --- sanitize: severity normalized; unhashable skips ONE row ---
+        s = pr.sanitize({"findings": [
+            {"claim": "caps", "evidence": ["a:1"], "severity": "Major"},
+            {"claim": "bad", "evidence": ["a:1"], "severity": ["major"]},
+            {"claim": "low", "evidence": ["a:1"], "severity": "minor"}]}, "l")
+        ok(s["filed"] == 2
+           and sorted(f["severity"] for f in s["findings"]) == ["major", "minor"],
+           "sanitize normalizes 'Major', skips (not crashes on) unhashable severity")
+
+        # --- lane name from panel.json cannot traverse out of panel/ ---
+        sn = pr.safe_lane_name("../../../tmp/x")
+        ok("/" not in sn and "." not in sn and pr.safe_lane_name(None) == "lane",
+           "safe_lane_name strips separators and dots")
+        res = pr.run_lane({"name": "../../oops", "type": "cmd", "cmd": "echo hi"},
+                          loop, "0", td, {"cmd_lanes_approved": ["echo hi"]})
+        raws = os.listdir(os.path.join(loop, "fragments", "panel"))
+        ok(res["status"] == "error"          # echo output is not candidates JSON
+           and any("oops" in n and ".." not in n for n in raws),
+           "traversal lane name is sanitized into fragments/panel/, not outside")
+
+        # --- a git-TRACKED (force-added) consent file authorizes NOTHING ---
+        groot = os.path.join(td, "gitroot")
+        gloop = os.path.join(groot, ".review-loop")
+        os.makedirs(gloop)
+        with open(os.path.join(gloop, "panel-consent.json"), "w") as fh:
+            json.dump({"remote_lanes_approved": True}, fh)
+        sh(["git", "init", "-q", groot])
+        ok(pr.load_consent(gloop).get("remote_lanes_approved") is True,
+           "UNTRACKED consent in a git checkout is honored")
+        sh(["git", "-C", groot, "add", "-f", ".review-loop/panel-consent.json"])
+        ok(pr.load_consent(gloop) == {},
+           "force-added (git-TRACKED) panel-consent.json is refused")
+
+        # --- malformed consent fails CLOSED; run() survives it ---
+        with open(os.path.join(loop, "panel-consent.json"), "w") as fh:
+            fh.write("{broken")
+        lanes = run_panel(td, {"OLLAMA_HOST": "http://gpu.example:11434"})
+        ok(lanes["good"]["status"] == "skipped"
+           and lanes["codexlane"]["status"] == "skipped",
+           "unreadable panel-consent.json = NO consent (fail closed, no crash)")
+
+        # --- malformed panel.json at RUN time: status line, exit 0 ---
+        mroot = os.path.join(td, "badpanel")
+        os.makedirs(os.path.join(mroot, ".review-loop", "briefs"))
+        with open(os.path.join(mroot, ".review-loop", "panel.json"), "w") as fh:
+            fh.write('{"lanes": [ broken')
+        r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "run", ".review-loop", "0"], cwd=mroot)
+        ok(r.returncode == 0 and "Traceback" not in r.stderr
+           and json.loads(r.stdout).get("status") == "panel-unreadable",
+           "run() reports malformed panel.json instead of a traceback")
+
+        # --- open_url: loopback bypasses proxies; remote uses urlopen ---
+        class Sentinel(Exception):
+            pass
+        def _sentinel(*a, **kw):
+            raise Sentinel("proxy-honoring urlopen used")
+        real_urlopen = pr.urllib.request.urlopen
+        old_proxy = os.environ.get("HTTP_PROXY")
+        os.environ["HTTP_PROXY"] = "http://203.0.113.1:9"    # TEST-NET-3
+        try:
+            pr.urllib.request.urlopen = _sentinel
+            try:
+                pr.open_url("http://127.0.0.1:1/api/tags", 1)
+                ok(False, "open_url loopback: connection unexpectedly succeeded")
+            except Sentinel:
+                ok(False, "loopback open_url must NOT use proxy-honoring urlopen")
+            except OSError:
+                ok(True, "loopback open_url bypasses proxies (direct, not urlopen)")
+            try:
+                pr.open_url("http://gpu.example:1/x", 1)
+                ok(False, "remote open_url should reach the urlopen stub")
+            except Sentinel:
+                ok(True, "non-loopback open_url still uses urlopen (consent-gated)")
+        finally:
+            pr.urllib.request.urlopen = real_urlopen
+            if old_proxy is None:
+                os.environ.pop("HTTP_PROXY", None)
+            else:
+                os.environ["HTTP_PROXY"] = old_proxy
+
+        # --- cmd-lane timeout kills the whole process GROUP ---
+        pidfile = os.path.join(td, "childpid")
+        cmd = f"sleep 30 & echo $! > {shlex.quote(pidfile)}; wait"
+        try:
+            pr.run_cmd({"cmd": cmd}, "", td, 1)
+            ok(False, "run_cmd should have timed out")
+        except subprocess.TimeoutExpired:
+            child = int(open(pidfile).read().strip())
+            dead = False
+            for _ in range(20):
+                try:
+                    os.kill(child, 0)
+                    time.sleep(0.1)
+                except ProcessLookupError:
+                    dead = True
+                    break
+            ok(dead, "cmd-lane timeout kills the shell's children (process group)")
+
+        # --- codex/gemini jailed in an empty scratch cwd; no stale reads ---
+        cap = {}
+        def fake_sub_run(cmd, **kw):
+            cap["cwd"] = kw.get("cwd")
+            cap["ls"] = os.listdir(kw.get("cwd"))
+            cap["env"] = kw.get("env")
+            return subprocess.CompletedProcess(cmd, 0, "fresh-stdout", "")
+        stale = os.path.join(td, "lane.last-message.txt")
+        with open(stale, "w") as fh:
+            fh.write("STALE output from a prior interrupted run")
+        real_sub = pr.subprocess.run
+        try:
+            pr.subprocess.run = fake_sub_run
+            raw, _ = pr.run_codex({"_out_base": os.path.join(td, "lane")},
+                                  "p", td, 5)
+            ok(cap["cwd"] != td and cap["ls"] == []
+               and "panel-lane-" in cap["cwd"],
+               "codex runs jailed in an empty scratch cwd, not the repo")
+            ok(raw == "fresh-stdout" and not os.path.exists(stale),
+               "stale codex .last-message.txt is deleted, never read as current")
+            cap.clear()
+            raw, _ = pr.run_gemini({}, "p", td, 5)
+            ok(cap["cwd"] != td and cap["ls"] == []
+               and cap["env"].get("GEMINI_CLI_TRUST_WORKSPACE") == "true",
+               "gemini's trusted workspace is the empty jail, not the repo")
+        finally:
+            pr.subprocess.run = real_sub
+
+        # --- ollama sizing: byte-aware estimate + server-side recheck ---
+        ok(pr.ollama_need("汉" * 1000) > pr.ollama_need("x" * 1000),
+           "ollama_need sizes byte-dense Unicode above equal-length ASCII")
+        try:
+            # char-based estimate (~16.6k) would have slipped past 17000;
+            # the byte-aware one (~41.6k) must refuse before any network.
+            pr.run_ollama({"num_ctx_max": 17000}, "汉" * 40000, td, 5)
+            ok(False, "Unicode-dense prompt should exceed num_ctx_max loudly")
+        except ValueError:
+            ok(True, "byte-aware estimate trips the loud pre-check")
+        class FakeResp:
+            def __init__(self, payload): self._p = payload
+            def read(self): return json.dumps(self._p).encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        real_open_url = pr.open_url
+        try:
+            pr.open_url = lambda req, t: FakeResp(
+                {"response": "ok", "prompt_eval_count": 999999})
+            try:
+                pr.run_ollama({"num_ctx_max": 65536}, "x" * 1000, td, 5)
+                ok(False, "run_ollama should refuse a context-filling response")
+            except ValueError:
+                ok(True, "prompt_eval_count at num_ctx fails loudly (real truncation)")
+            pr.open_url = lambda req, t: FakeResp(
+                {"response": "fine", "prompt_eval_count": 300})
+            raw, _ = pr.run_ollama({"num_ctx_max": 65536}, "x" * 1000, td, 5)
+            ok(raw == "fine", "normal prompt_eval_count passes through")
+        finally:
+            pr.open_url = real_open_url
+
+        # --- .stat with invalid UTF-8 must not abort prompt-building ---
+        with open(os.path.join(loop, "briefs", "round-7.stat"), "wb") as fh:
+            fh.write(b"weird-\xff-name.md | 2 +-\n")
+        shutil.copy(os.path.join(loop, "briefs", "round-0.diff"),
+                    os.path.join(loop, "briefs", "round-7.diff"))
+        p7, _ = pr.build_prompt(loop, "7", 1000)
+        ok("weird-" in p7, "invalid UTF-8 in .stat tolerated (errors=replace)")
+
+        # --- render_report: bare-string 'sources' renders as one tag ---
+        line = rr.finding_line({"id": "x", "severity": "major",
+                                "current_status": "open",
+                                "source": "panel:ollama",
+                                "sources": "panel:ollama"})[0]
+        ok("via panel:ollama" in line and "p+a+n" not in line,
+           "bare-string 'sources' renders as one lane tag, not characters")
 
         # --- CONTROLS.md mirrors stay byte-identical (HANDOFF.md cp-sync) ---
         repo = os.path.abspath(os.path.join(HERE, "..", ".."))

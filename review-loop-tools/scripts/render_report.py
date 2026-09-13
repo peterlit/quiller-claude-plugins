@@ -32,7 +32,11 @@ def finding_line(f):
         bits.append("introduced_by_fix")
     if f.get("source"):
         srcs = f.get("sources") or [f["source"]]
-        bits.append("via " + "+".join(srcs))
+        # 'sources' is a list by schema, but an LLM-written fragment can slip
+        # a bare string ("+".join would emit p+a+n+e+l) or a non-iterable.
+        if not isinstance(srcs, list):
+            srcs = [srcs]
+        bits.append("via " + "+".join(str(s) for s in srcs))
     out = ["- " + "; ".join(bits)]
     if f.get("claim"):
         out.append(f"  - {f['claim']}")

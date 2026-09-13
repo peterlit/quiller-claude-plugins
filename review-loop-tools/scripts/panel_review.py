@@ -37,12 +37,15 @@ invokes (`bash tools/lane.sh` stays approved while lane.sh changes under a
 pull) — prefer self-contained commands.
 
 Phase 1 is diff-only for every lane: the model sees the stat and the diff,
-not the repo. Candidates carry no IDs and no status — the panel-verifier
+not the repo — codex/gemini run in an empty scratch cwd so their file tools
+have no workspace to read, and loopback ollama traffic bypasses HTTP(S)_PROXY
+so "local" cannot silently route off-machine. Candidates carry no IDs and no
+status — the panel-verifier
 agent verifies them against the code and only the skeptical-reviewer (the
 chair) ever writes the ledger fragment.
 """
-import concurrent.futures, hashlib, ipaddress, json, os, re, shutil
-import subprocess, sys, tempfile
+import concurrent.futures, contextlib, hashlib, ipaddress, json, os, re, shutil
+import signal, subprocess, sys, tempfile
 import urllib.error, urllib.parse, urllib.request
 
 SEVERITIES = {"blocker", "major", "minor"}
@@ -52,7 +55,10 @@ CHARS_PER_TOKEN = 4           # rough cap arithmetic for max_diff_tokens
 def normalize_url(u):
     """Ollama's documented OLLAMA_HOST form is scheme-less (127.0.0.1:11434);
     without a scheme urlsplit parses the host as a path, so both the loopback
-    check and urlopen would misread it. Default the scheme, not the host."""
+    check and urlopen would misread it. Default the scheme, not the host.
+    Also strip trailing slashes: OLLAMA_HOST='http://h:11434/' would build
+    double-slash endpoints (…//api/generate) some proxies reject."""
+    u = u.rstrip("/")
     return u if "://" in u else "http://" + u
 
 OLLAMA_URL = normalize_url(os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
@@ -80,11 +86,52 @@ def is_loopback(url):
     except ValueError:
         return False
 
+def open_url(req, timeout):
+    """urlopen honors HTTP(S)_PROXY env vars by default, so a 'loopback'
+    request would silently route through an off-machine proxy — shipping the
+    diff past the consent gate that classified it as local. Loopback targets
+    therefore bypass ALL proxies; non-loopback targets already require
+    remote-lane consent, where a proxy changes nothing the user hasn't
+    approved."""
+    url = req.full_url if isinstance(req, urllib.request.Request) else req
+    if is_loopback(url):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+def consent_file_tracked(path):
+    """A consent file that TRAVELS IN GIT is the exact attack load_consent
+    exists to prevent — `git add -f` bypasses the .gitignore convention, so
+    ask git directly whether the file is tracked. No git / not a repo means
+    nothing could have tracked it into place."""
+    try:
+        r = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(path)),
+                            "ls-files", "--error-unmatch", os.path.basename(path)],
+                           capture_output=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
 def load_consent(loop):
     """Consent is per-checkout state, read ONLY from the untracked
     panel-consent.json — never from git-tracked panel.json, so a file that
-    arrives with a clone cannot approve egress or shell execution."""
-    c = load_json(os.path.join(loop, "panel-consent.json"), {})
+    arrives with a clone cannot approve egress or shell execution. A
+    force-committed panel-consent.json is refused for the same reason, and
+    an unreadable one fails CLOSED (no consent), never with a traceback."""
+    path = os.path.join(loop, "panel-consent.json")
+    if not os.path.exists(path):
+        return {}
+    if consent_file_tracked(path):
+        print("panel_review: panel-consent.json is TRACKED in git — consent "
+              "must be per-checkout; ignoring it (git rm --cached it, then "
+              "re-consent locally)", file=sys.stderr)
+        return {}
+    try:
+        c = load_json(path, {})
+    except (ValueError, OSError) as e:
+        print(f"panel_review: panel-consent.json unreadable ({e}) — treating "
+              f"as NO consent", file=sys.stderr)
+        return {}
     return c if isinstance(c, dict) else {}
 
 def cmd_approved(consent, cmd):
@@ -185,7 +232,7 @@ def probe(args):
     # must be able to see that OLLAMA_HOST points at another machine.
     local = {"endpoint": OLLAMA_URL}
     try:
-        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=5) as resp:
+        with open_url(f"{OLLAMA_URL}/api/tags", 5) as resp:
             models = [m.get("name") for m in json.load(resp).get("models", [])]
         local.update({"installed": True, "auth": "none-needed", "models": models})
         if not is_loopback(OLLAMA_URL):
@@ -217,7 +264,11 @@ def fenced(text, lang=""):
 def build_prompt(loop, rnd, max_diff_tokens):
     with open(template_path(), encoding="utf-8") as fh:
         tmpl = fh.read()
-    stat = open(os.path.join(loop, "briefs", f"round-{rnd}.stat"), encoding="utf-8").read()
+    # Same tolerance as the .diff read below: an oddly-encoded filename in
+    # the diffstat must not abort prompt-building for every lane.
+    with open(os.path.join(loop, "briefs", f"round-{rnd}.stat"),
+              encoding="utf-8", errors="replace") as fh:
+        stat = fh.read()
     diff_path = os.path.join(loop, "briefs", f"round-{rnd}.diff")
     cap_chars = max_diff_tokens * CHARS_PER_TOKEN
     with open(diff_path, encoding="utf-8", errors="replace") as fh:
@@ -266,7 +317,12 @@ def sanitize(obj, lane):
     for f in obj["findings"]:
         if not isinstance(f, dict):
             continue
-        if not f.get("claim") or f.get("severity") not in SEVERITIES:
+        # Normalize severity, don't just gate on it: models emit 'Major',
+        # and a non-string severity (list/dict is unhashable) must skip THIS
+        # candidate — a TypeError here would discard the whole lane batch.
+        sev = f.get("severity")
+        sev = sev.strip().lower() if isinstance(sev, str) else ""
+        if not f.get("claim") or sev not in SEVERITIES:
             continue
         ev = f.get("evidence")
         if not (isinstance(ev, list) and ev):
@@ -277,7 +333,7 @@ def sanitize(obj, lane):
             conf = 0.5
         keep.append({"claim": str(f["claim"])[:600],
                      "evidence": [str(e)[:200] for e in ev][:8],
-                     "severity": f["severity"],
+                     "severity": sev,
                      "confidence": conf,
                      "area": str(f.get("area", ""))[:80]})
     keep.sort(key=lambda f: -f["confidence"])
@@ -287,13 +343,22 @@ def sanitize(obj, lane):
 
 def run_codex(lane, prompt, repo, timeout):
     out_file = lane["_out_base"] + ".last-message.txt"
+    # A leftover output file from a prior interrupted run must never be read
+    # as THIS run's result if codex exits 0 without rewriting it.
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(out_file)
     cmd = ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check",
            "--output-last-message", out_file]
     if lane.get("model"):
         cmd += ["-m", lane["model"]]
     cmd.append("-")
-    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                       timeout=timeout, cwd=repo)
+    # Diff-only means diff-only: run in an EMPTY scratch cwd, not the repo,
+    # so a prompt-injected tool call has no workspace to read. (codex's
+    # read-only sandbox still permits absolute-path reads; the jail removes
+    # the repo as the discoverable default, not every conceivable read.)
+    with tempfile.TemporaryDirectory(prefix="panel-lane-") as jail:
+        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                           timeout=timeout, cwd=jail)
     if os.path.exists(out_file):
         with open(out_file, encoding="utf-8") as fh:
             return fh.read(), r
@@ -305,13 +370,22 @@ def run_gemini(lane, prompt, repo, timeout):
         cmd += ["-m", lane["model"]]
     # gemini-cli >= 0.59 refuses non-interactive runs in an untrusted
     # directory. The lane uses gemini as a pure text generator on a prompt
-    # we feed it — it needs no workspace tool access — so trusting the
-    # workspace for THIS subprocess only is safe and keeps the lane
-    # non-interactive.
+    # we feed it — it needs no workspace tool access — so the "trusted
+    # workspace" is an EMPTY scratch dir, never the repo: diff-only means
+    # the CLI's own file tools have nothing to read even under injection.
     env = dict(os.environ, GEMINI_CLI_TRUST_WORKSPACE="true")
-    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                       timeout=timeout, cwd=repo, env=env)
+    with tempfile.TemporaryDirectory(prefix="panel-lane-") as jail:
+        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                           timeout=timeout, cwd=jail, env=env)
     return r.stdout, r
+
+def ollama_need(prompt):
+    """Context-size estimate. Chars/4 alone is NOT an upper bound: byte-dense
+    Unicode tokenizes near one token per few BYTES, so size from the larger
+    of chars and utf-8 bytes. Still a heuristic — run_ollama re-checks the
+    server's reported prompt_eval_count after the call and fails loudly."""
+    return int(max(len(prompt), len(prompt.encode("utf-8")))
+               / CHARS_PER_TOKEN * 1.25) + 4096
 
 def run_ollama(lane, prompt, repo, timeout):
     # num_ctx must cover the whole prompt: ollama's default context is far
@@ -319,7 +393,7 @@ def run_ollama(lane, prompt, repo, timeout):
     # exact silent-cap failure the panel design forbids. Size it from the
     # actual prompt plus headroom for the response, and FAIL LOUDLY when the
     # lane's num_ctx_max cannot hold it (a silent clamp is the same failure).
-    need = int(len(prompt) / CHARS_PER_TOKEN * 1.25) + 4096
+    need = ollama_need(prompt)
     num_ctx_max = int(lane.get("num_ctx_max", 65536))
     if need > num_ctx_max:
         raise ValueError(
@@ -331,21 +405,50 @@ def run_ollama(lane, prompt, repo, timeout):
                        "options": {"num_ctx": need}}).encode()
     req = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=body,
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.load(resp).get("response", ""), None
+    with open_url(req, timeout) as resp:
+        data = json.load(resp)
+    # The estimate is char/byte arithmetic, not the model's tokenizer. The
+    # server's prompt_eval_count is ground truth: a prompt that consumed
+    # essentially the whole context was truncated (or left no room for the
+    # response) — the silent failure the pre-check exists to prevent.
+    pe = data.get("prompt_eval_count")
+    if isinstance(pe, int) and pe >= need - 1024:
+        raise ValueError(
+            f"ollama consumed {pe} prompt tokens of num_ctx {need} — the "
+            f"context estimate undershot and the prompt was likely truncated; "
+            f"raise num_ctx_max or lower max_diff_tokens")
+    return data.get("response", ""), None
 
 def run_cmd(lane, prompt, repo, timeout):
     """Generic lane: any command that reads the prompt on stdin and prints
     the candidates JSON on stdout. The escape hatch for CLIs we don't know,
     and the fixture hook for testing the panel plumbing offline. Gated by
     cmd_lanes_approved in the untracked panel-consent.json — panel.json is
-    git-tracked and must never be sufficient to execute shell."""
-    r = subprocess.run(lane["cmd"], shell=True, input=prompt, capture_output=True,
-                       text=True, timeout=timeout, cwd=repo)
-    return r.stdout, r
+    git-tracked and must never be sufficient to execute shell. Runs in its
+    own process GROUP so a timeout kills the shell's children too, not just
+    the shell (subprocess.run's timeout leaves pipeline/background children
+    running)."""
+    p = subprocess.Popen(lane["cmd"], shell=True, stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, cwd=repo, start_new_session=True)
+    try:
+        out, err = p.communicate(prompt, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(p.pid, signal.SIGKILL)   # pgid == pid (new session)
+        p.wait()
+        raise
+    return out, subprocess.CompletedProcess(lane["cmd"], p.returncode, out, err)
 
 RUNNERS = {"codex": run_codex, "gemini": run_gemini, "ollama": run_ollama,
            "cmd": run_cmd}
+
+def safe_lane_name(name):
+    """Lane names come from git-tracked panel.json and are spliced into
+    output paths: a pulled-in name like '../../x' must not write outside
+    fragments/panel/. Filesystem-safe charset only (no dots — '..' survives
+    a dot-permitting charset); display strings keep the raw name."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", str(name or "lane"))[:64] or "lane"
 
 def run_lane(lane, loop, rnd, repo, consent):
     name, kind = lane.get("name"), lane.get("type", lane.get("name"))
@@ -355,7 +458,7 @@ def run_lane(lane, loop, rnd, repo, consent):
     # hook polices as ledger fragments — the guard never scans subdirs.
     frag_dir = os.path.join(loop, "fragments", "panel")
     os.makedirs(frag_dir, exist_ok=True)
-    base = os.path.join(frag_dir, f"round-{rnd}-{name}")
+    base = os.path.join(frag_dir, f"round-{rnd}-{safe_lane_name(name)}")
     lane["_out_base"] = base
     # Consent gates by DESTINATION and capability, not lane type alone.
     if kind in ("codex", "gemini") and not consent.get("remote_lanes_approved"):
@@ -410,7 +513,15 @@ def run(args):
         print("usage: panel_review.py run <loop-dir> <round>", file=sys.stderr)
         sys.exit(2)
     loop, rnd = args[0], args[1]
-    panel = load_json(os.path.join(loop, "panel.json"))
+    try:
+        panel = load_json(os.path.join(loop, "panel.json"))
+    except (ValueError, OSError) as e:
+        # Same grace probe() got: a malformed/merge-conflicted panel.json at
+        # round time must report, not traceback. The panel never blocks a
+        # round; the status line makes the breakage visible.
+        print(json.dumps({"status": "panel-unreadable",
+                          "note": f"panel.json: {e}"[:200]}))
+        return
     if not panel or not panel.get("lanes"):
         print(json.dumps({"status": "no-panel", "note": "no panel.json or no lanes"}))
         return
