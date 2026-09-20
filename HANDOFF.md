@@ -208,7 +208,9 @@ accounts**, so its remaining content is summarized here:
   `NODE_OPTIONS`; `run --lanes`/`--detach`/`wait`; a live-dispatch counter
   behind `:dispatched`; `read_guard` matching command position; `mutate.py`
   baseline run and dirty-tree refusal; tally merge and one definition of
-  "kept". Five judgment calls in its Part D.
+  "kept". Its five judgment calls and the feedback proposal's five were
+  all resolved by interview on 2026-09-20 (recommended options); both
+  proposals still await the explicit build approval.
 
 **Watch items for the next field reports** (post-0.13.0/0.14.0): the shipped
 driver building and serving on a field rig (first non-Causeway app); the

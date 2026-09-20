@@ -319,6 +319,12 @@ code (HANDOFF §2.2).
 
 ## Part D — judgment calls flagged for Peter
 
+**All five RESOLVED 2026-09-20 (interviewed), each on the recommended
+option:** J1 counter file; J2 soft with loud banner; J3 automatic cap,
+disclosed; J4 refuse with `--allow-dirty`; J5 `--detach`/`wait` verbs. The
+proposal as written above is the approved shape; build awaits the explicit
+"go".
+
 - **J1. Dispatch tracking: counter file vs. keyed suffix.** A3 proposes an
   integer in `briefs/.dispatched` behind the existing `:dispatched` suffix.
   Alternative: `:dispatched:<n>` inside `.phase` itself (no second file,

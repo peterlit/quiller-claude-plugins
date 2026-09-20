@@ -252,6 +252,12 @@ messages keep carrying the reasoning (the decision log ritual is unchanged).
 
 ## Part D — judgment calls flagged for Peter
 
+**All five RESOLVED 2026-09-20 (interviewed), each on the recommended
+option:** J1 XDG data dir; J2 `feedback/` is an allowlisted conclusion; J3
+adopt and mirror `loop_usage.py`; J4 IDs include the host name; J5 the
+shipped `FIELD-QUESTIONS.md` is the watch list's source of truth. Build
+awaits the explicit "go".
+
 - **J1. Drop location.** `${XDG_DATA_HOME:-~/.local/share}/quiller/inbox/`
   over `~/.claude/quiller-inbox/` or the field repo alone. Chosen for
   consistency with the consent store; the alternative is discoverable from
