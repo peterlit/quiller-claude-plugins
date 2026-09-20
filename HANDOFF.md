@@ -199,6 +199,16 @@ accounts**, so its remaining content is summarized here:
   a script, and a shipped per-plugin `FIELD-QUESTIONS.md` carries the watch
   items and settled decisions to the field. If approved, the watch list
   below moves into that file and this section keeps only a pointer.
+  Revised 2026-09-20 against the panel field reports (cross-report
+  dedupe, two schema sections, per-dispatch wall-clock from the hooks).
+- **Proposed 2026-09-20, awaiting approval — review-loop-tools 0.14.0 /
+  qa-loop-tools 0.15.0** (`docs/proposal-2026-09-20-panel-field-reports.md`):
+  digest of three review-loop 0.13.0 panel runs (agents 1 and 2, all on the
+  current version). Headline items: panel probe checks consent and scrubs
+  `NODE_OPTIONS`; `run --lanes`/`--detach`/`wait`; a live-dispatch counter
+  behind `:dispatched`; `read_guard` matching command position; `mutate.py`
+  baseline run and dirty-tree refusal; tally merge and one definition of
+  "kept". Five judgment calls in its Part D.
 
 **Watch items for the next field reports** (post-0.13.0/0.14.0): the shipped
 driver building and serving on a field rig (first non-Causeway app); the

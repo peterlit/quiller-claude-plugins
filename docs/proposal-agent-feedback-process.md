@@ -296,3 +296,61 @@ arrive by ingest with no hand delivery, state the running version in their
 first ten lines, answer every watch item, and contain zero items that
 ingest tags as settled. If any of those four fails, that is the first
 feedback on the feedback process.
+
+---
+
+## Revision 2026-09-20 — what the 2026-09-13/19 reports change
+
+Four files arrived by hand delivery on 2026-09-20 (three review-loop 0.13.0
+reports, one qa decisions record). Read against the design above, they
+confirm most of it and change five things.
+
+**Confirmed.** All three review reports state the running version in their
+first three lines and it is current. Both agents converged on the same
+sections unprompted (usage table, what worked, defects in impact order,
+recommendations, judgment calls). Agent 1's 2026-09-19 report cites its own
+2026-09-13 workaround ("as the 2026-09-13 report suggested") — exactly the
+"seen again by ID" case A2.4 provides for. The qa decisions record arrived
+eleven days after the run it describes: the decisions section belongs in
+the bundle written at run end, as A2.4 says, or it is written from memory
+or not at all.
+
+**Changed:**
+
+1. **Cross-report duplication is the ingest's main job, not version
+   checking.** Four defects were filed independently in all three reports
+   (ollama 0/N kept, no per-lane rerun, the `:dispatched` marker, no lane
+   usage). B1 gains a "same defect, N reports" grouping keyed on the
+   anomaly code where one exists and on a normalized region+symptom
+   otherwise; the proposal cites the group, not three items.
+2. **Two schema sections added to A2.4.** *Host-repo recommendations*
+   (agent 1's "Recommendations for this repo": which lanes to keep, session
+   hygiene) — actions for the host, not the plugin, and today they sit in
+   the same list as defects. *Environment and harness artifacts* (agent 1's
+   "Environment notes (not the plugin's fault)": `NODE_OPTIONS`, MCP tools
+   not loaded, a scheme that refuses UI tests). This is HANDOFF's second
+   diagnostic ("distinguish harness artifacts from plugin bugs") made a
+   field the reporter fills, so triage starts with the reporter's own call.
+3. **Per-dispatch wall-clock and panel lane telemetry in `run-summary.json`
+   (A1).** Agent 1 hand-timed every dispatch (`Wall` column) both runs;
+   agent 2 measured effective tokens instead. The two scales cannot be
+   compared. `dispatch_stamp.sh` already fires at every dispatch and the
+   SubagentStop hook at every return: they record `(phase, start, end)` to
+   `feedback/dispatches.jsonl` at no token cost, and panel `run` records
+   `elapsed_s` per lane (proposal 2026-09-20 A12). The bundle then carries
+   wall-clock by construction and effective tokens from `loop_usage.py`.
+4. **Anomaly codes get a first vocabulary from these reports** (A1): lane
+   `skipped`/`error`/`timeout`/`cached`/`capped`, `dispatch-count-mismatch`
+   (counter left non-zero at phase end), `session-ok-created`,
+   `read-guard-denied`, `archive-late-duplicates`, `mutate-baseline-red`,
+   `mutate-dirty-refused`, `usage-repeat-notification`. Each is a place the
+   0.14.0 scripts already decide something; the verb call is one line
+   each.
+5. **The recommended item ID is adopted retroactively** in
+   `docs/proposal-2026-09-20-panel-field-reports.md` (e.g.
+   `rl-0.13.0-20260919-weatherapp-3`) so the first `FIELD-QUESTIONS.md`
+   dispositions list can be generated from that proposal without renaming.
+
+Unchanged: the delivery drop, the one-command skill, `--quick`, and every
+decline in Part C. Judgment calls J1–J5 stand and are put to Peter together
+with the 2026-09-20 proposal's.
