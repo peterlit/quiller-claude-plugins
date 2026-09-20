@@ -684,16 +684,16 @@ under each diagram.
 
 ```mermaid
 sequenceDiagram
-    participant H as "Human"
-    participant K as "Hooks"
-    participant O as "Orchestrator"
-    participant L as "Ledger scripts"
-    participant S as "Loop state (disk)"
+    participant H as Human
+    participant K as Hooks
+    participant O as Orchestrator
+    participant L as Ledger scripts
+    participant S as Loop state (disk)
 
     H->>K: Invoke the review loop
     K->>K: Measure this session's transcript
     K-->>O: Deliver prompt with size verdict
-    Note right of K: Warns above 2 MB; silent once a go-ahead marker exists
+    Note right of K: Warns above 2 MB — silent once a go-ahead marker exists
     alt session is oversized
         O->>H: Recommend a fresh session
         H-->>O: Accept the cost, or restart
@@ -720,11 +720,11 @@ Scope mode sets `max_rounds` to 2 instead of 5 (`SKILL.md` lines 82-87).
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant L as "Ledger scripts"
-    participant K as "Hooks"
-    participant R as "Reviewer agent"
-    participant S as "Loop state (disk)"
+    participant O as Orchestrator
+    participant L as Ledger scripts
+    participant K as Hooks
+    participant R as Reviewer agent
+    participant S as Loop state (disk)
 
     alt scope mode
         O->>L: Record the change under review
@@ -761,12 +761,12 @@ Sources: `SKILL.md` Setup 3 (lines 163-191) and "Each round — Start" (lines
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant K as "Hooks"
-    participant I as "Implementer agent"
-    participant R as "Reviewer agent"
-    participant L as "Ledger scripts"
-    participant G as "Git"
+    participant O as Orchestrator
+    participant K as Hooks
+    participant I as Implementer agent
+    participant R as Reviewer agent
+    participant L as Ledger scripts
+    participant G as Git
 
     Note over O: Round marked implementing by the previous advance
     O->>K: Dispatch the implementer with the brief
@@ -778,7 +778,7 @@ sequenceDiagram
     K-->>O: Clear in-flight mark, deliver result
     O->>L: Materialize the round diff
     L->>G: Read the diff for the range
-    Note right of L: Writes diff, stat and changed-file list; hidden paths listed
+    Note right of L: Writes diff, stat and changed-file list — hidden paths listed
     O->>K: Dispatch the reviewer
     K->>R: Run with diff paths and claims
     R->>G: Verify each claim against the code
@@ -798,11 +798,11 @@ and 56-75 (commit knobs); `merge_ledger.py write_diff()` lines 365-423
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant L as "Ledger scripts"
-    participant V as "Verdict engine"
-    participant S as "Loop state (disk)"
-    participant G as "Git"
+    participant O as Orchestrator
+    participant L as Ledger scripts
+    participant V as Verdict engine
+    participant S as Loop state (disk)
+    participant G as Git
 
     O->>L: Close round with fragment and costs
     L->>G: Record where the round ended
@@ -833,11 +833,11 @@ advance 509-529); `metrics.py main()` lines 110-229.
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant L as "Ledger scripts"
-    participant V as "Verdict engine"
-    participant H as "Human"
-    participant S as "Loop state (disk)"
+    participant O as Orchestrator
+    participant L as Ledger scripts
+    participant V as Verdict engine
+    participant H as Human
+    participant S as Loop state (disk)
 
     O->>L: Close the round
     L->>V: Compute the round verdict
@@ -876,13 +876,13 @@ closeout and report that follow every stop.
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant L as "Ledger scripts"
-    participant P as "Panel runner"
-    participant V as "Verifier agent"
-    participant S as "Loop state (disk)"
+    participant O as Orchestrator
+    participant L as Ledger scripts
+    participant P as Panel runner
+    participant V as Verifier agent
+    participant S as Loop state (disk)
 
-    Note over O: Any stop verdict; panel lanes are configured
+    Note over O: Any stop verdict — panel lanes are configured
     O->>L: Materialize the accumulated diff
     O->>S: Mark an honest wait on the panel
     O->>P: Run the lanes detached
@@ -907,17 +907,17 @@ lines 897-901; `merge_ledger.py open_findings()` wontfix branch lines
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant L as "Ledger scripts"
-    participant I as "Implementer agent"
-    participant R as "Reviewer agent"
-    participant S as "Loop state (disk)"
+    participant O as Orchestrator
+    participant L as Ledger scripts
+    participant I as Implementer agent
+    participant R as Reviewer agent
+    participant S as Loop state (disk)
 
     O->>L: Select closeout-eligible findings
     alt eligible findings exist
         O->>S: Mark the closeout round implementing
         O->>I: One dispatch: smallest correct change
-        I-->>O: Change claims; punts sketched aside
+        I-->>O: Change claims — punts sketched aside
         O->>O: Check tests cover every touched target
         O->>L: Materialize the closeout diff
         O->>R: One dispatch: verify fixes, full suite
@@ -948,12 +948,12 @@ Split in two: the human-facing gate, then the seed run itself.
 
 ```mermaid
 sequenceDiagram
-    participant H as "Human"
-    participant O as "Orchestrator"
-    participant P as "Panel runner"
-    participant X as "Panel lanes (external models)"
-    participant C as "Consent store (machine-local)"
-    participant S as "Loop state (disk)"
+    participant H as Human
+    participant O as Orchestrator
+    participant P as Panel runner
+    participant X as Panel lanes (external models)
+    participant C as Consent store (machine-local)
+    participant S as Loop state (disk)
 
     O->>P: Probe the configured lanes
     P->>X: Check install, auth, smoke each lane
@@ -966,7 +966,7 @@ sequenceDiagram
     O->>P: Ask where consent lives
     P-->>O: Machine-local consent path
     H->>C: Record remote and command approvals
-    Note over C: Consent never lives in the repo; an in-repo file is ignored
+    Note over C: Consent never lives in the repo — an in-repo file is ignored
 ```
 
 Sources: `SKILL.md` Setup 2b (lines 121-162); `panel_review.py probe()`
@@ -978,12 +978,12 @@ lines 346-469 (`gate_issues` 428-464), `consent_path()` lines 184-237,
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant L as "Ledger scripts"
-    participant P as "Panel runner"
-    participant X as "Panel lanes (external models)"
-    participant V as "Verifier agent"
-    participant R as "Reviewer agent (chair)"
+    participant O as Orchestrator
+    participant L as Ledger scripts
+    participant P as Panel runner
+    participant X as Panel lanes (external models)
+    participant V as Verifier agent
+    participant R as Reviewer agent (chair)
 
     O->>L: Materialize the scope diff
     O->>P: Run seed lanes detached, then wait
@@ -994,7 +994,7 @@ sequenceDiagram
     end
     P->>P: Sanitize, drop out-of-scope evidence, cap
     P-->>O: Lane statuses and candidate files
-    Note right of P: Failures are soft and classified; a model list is tried in order
+    Note right of P: Failures are soft and classified — a model list is tried in order
     O->>V: Verify candidates against the code
     V-->>O: Verified findings and lane tallies
     O->>L: Record lane tallies
@@ -1012,21 +1012,21 @@ lines 670-731.
 
 ```mermaid
 sequenceDiagram
-    participant I as "Implementer agent"
-    participant M as "Mutation runner"
-    participant G as "Git"
-    participant O as "Orchestrator"
-    participant R as "Reviewer agent"
+    participant I as Implementer agent
+    participant M as Mutation runner
+    participant G as Git
+    participant O as Orchestrator
+    participant R as Reviewer agent
 
     I->>I: Write a manifest with a control mutant
     I->>G: Commit the fix and tests first
     I->>M: Run the manifest
-    M->>M: Validate manifest; refuse uncommitted files
+    M->>M: Validate manifest — refuse uncommitted files
     M->>G: Cut a throwaway worktree at head
-    M->>M: Run each gate unmutated; refuse red
+    M->>M: Run each gate unmutated — refuse red
     loop each mutant
         M->>G: Apply the mutant in the worktree
-        M->>M: Run its gate; classify killed or survived
+        M->>M: Run its gate — classify killed or survived
         M->>G: Restore the file
     end
     M->>G: Remove the worktree
@@ -1046,14 +1046,14 @@ Sources: `agents/implementer.md` lines 62-87; `scripts/mutate.py` lines
 
 ```mermaid
 sequenceDiagram
-    participant A as "Any agent"
-    participant K as "Hooks"
-    participant S as "Loop state (disk)"
+    participant A as Any agent
+    participant K as Hooks
+    participant S as Loop state (disk)
 
     A->>K: Stage everything and commit
     K->>S: Is a loop live?
     K-->>A: Block: stage files by path
-    Note right of K: Live means a round, seed or awaiting-human phase; done arms nothing
+    Note right of K: Live means a round, seed or awaiting-human phase — done arms nothing
     A->>K: Dump a whole large file
     K->>S: Is a round in flight?
     K-->>A: Block: locate, then read a window
@@ -1074,12 +1074,12 @@ call); `tests/hooks_selftest.py` lines 89-123.
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant K as "Hooks"
-    participant R as "Reviewer agent"
-    participant S as "Loop state (disk)"
+    participant O as Orchestrator
+    participant K as Hooks
+    participant R as Reviewer agent
+    participant S as Loop state (disk)
 
-    Note over S: Review phase marked; a dispatch is owed
+    Note over S: Review phase marked — a dispatch is owed
     O->>K: End the turn without dispatching
     K->>S: Read the phase marker
     K-->>O: Block: dispatch now, or mark done
@@ -1089,7 +1089,7 @@ sequenceDiagram
     K->>R: Run
     R->>S: Write a fragment missing its claim
     R-->>K: Finish
-    K->>S: Decrement the count; clear mark at zero
+    K->>S: Decrement the count — clear mark at zero
     K->>S: Validate every flat fragment
     alt invalid and older than ten seconds
         K-->>R: Block: rewrite the fragment
@@ -1110,10 +1110,10 @@ pauses" (lines 349-370).
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant K as "Hooks"
-    participant R as "Reviewer agent"
-    participant S as "Loop state (disk)"
+    participant O as Orchestrator
+    participant K as Hooks
+    participant R as Reviewer agent
+    participant S as Loop state (disk)
 
     O->>K: Dispatch the reviewer
     K->>S: Mark a dispatch in flight
@@ -1129,7 +1129,7 @@ sequenceDiagram
     O->>K: End the turn
     K->>S: Read the phase marker
     K-->>O: Allow: honest wait
-    Note right of S: Partial files are never policed; the orchestrator clears the wait
+    Note right of S: Partial files are never policed — the orchestrator clears the wait
 ```
 
 Sources: `SKILL.md` "Waiting, failures, and pauses" (lines 349-370);
@@ -1143,21 +1143,21 @@ suffix never matches `\.json$`); `agents/skeptical-reviewer.md` lines
 
 ```mermaid
 sequenceDiagram
-    participant O as "Orchestrator"
-    participant L as "Ledger scripts"
-    participant S as "Loop state (disk)"
-    participant G as "Git"
+    participant O as Orchestrator
+    participant L as Ledger scripts
+    participant S as Loop state (disk)
+    participant G as Git
 
     O->>S: Detect a finished or abandoned loop
     O->>L: Archive the loop
     L->>S: Name the archive by its own sha
     L->>L: Scan for duplicate names first
     loop each state file
-        L->>S: Move the file; verify source gone
+        L->>S: Move the file — verify source gone
     end
     L->>S: Sweep unknown files into legacy
     Note right of S: Lane config, allowlist, evidence root and backlog stay
-    L->>L: Re-scan; settle briefly; re-scan again
+    L->>L: Re-scan — settle briefly — re-scan again
     alt new sync-conflict duplicates appeared
         L-->>O: Fail: the duplicate is the real file
     else clean

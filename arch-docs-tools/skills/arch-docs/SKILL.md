@@ -40,7 +40,10 @@ Dispatch one `arch-documenter` in DETAIL mode PER DELIVERABLE, all in a
 single message so they run in parallel (they are independent and read-only
 with respect to source). Each dispatch carries: deliverable name, slug, root
 path(s), the survey JSON, the output file path, whether it is the only
-deliverable, and the script paths
+deliverable, a reminder of the two diagram classes (high-level sequence and
+flow diagrams speak plain-English roles and actions with no commands or
+paths; detailed data-model and wiring diagrams use precise identifiers),
+and the script paths
 `${CLAUDE_PLUGIN_ROOT}/scripts/mermaid_lint.py` and
 `${CLAUDE_PLUGIN_ROOT}/scripts/coverage_check.py`.
 Collect each agent's MANIFEST block.

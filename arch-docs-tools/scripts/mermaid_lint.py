@@ -4,6 +4,11 @@
 Catches the common generation errors — unknown diagram type, unbalanced
 brackets, unquoted special characters in flowchart labels, subgraph/end
 mismatch, empty blocks — without embedding a real mermaid renderer.
+Sequence diagrams: a semicolon inside Note or message text is a statement
+separator to Mermaid and produces "Parse error on line N" (measured: one
+shipped diagram), and a QUOTED participant alias renders with literal
+quotes — both are issues. erDiagram relationship lines (||--o{ and kin)
+are exempt from brace balancing; their crow's-foot glyphs are not braces.
 Exit 1 if any issue is found.
 
 Usage: mermaid_lint.py <file.md> [more.md ...]
@@ -27,13 +32,27 @@ def lint_block(lines, path, start):
         head = first.split()[0] if first.split() else "<blank>"
         issues.append(f"{path}:{start}: unknown diagram type '{head}'")
     is_flow = first.startswith(("flowchart", "graph"))
+    is_seq = first.startswith("sequenceDiagram")
+    is_er = first.startswith("erDiagram")
     counts = {"()": 0, "[]": 0, "{}": 0}
     subgraphs = ends = 0
+    SEQ_TEXT = re.compile(r"^\s*(?:Note\s+(?:over|right of|left of)\s+[^:]+"
+                          r"|[^\s:]+\s*(?:-->>|->>|-->|->|--x|-x|--\)|-\))\s*[^\s:]+)\s*:(.*)$")
     for i, raw in enumerate(lines):
         l = strip_quoted(raw)
+        if is_er and re.search(r"\s(\|\||\|o|\}\||\}o)(--|\.\.)(\|\||o\||\|\{|o\{)\s", raw):
+            continue   # relationship line: crow's-foot glyphs, not braces
         counts["()"] += l.count("(") - l.count(")")
         counts["[]"] += l.count("[") - l.count("]")
         counts["{}"] += l.count("{") - l.count("}")
+        if is_seq:
+            m = SEQ_TEXT.match(raw)
+            if m and ";" in m.group(1):
+                issues.append(f"{path}:{start + i + 1}: sequence text contains ';' "
+                              f"(a statement separator — Mermaid parse error); use a comma or dash")
+            if re.match(r'^\s*participant\s+\S+\s+as\s+"', raw):
+                issues.append(f"{path}:{start + i + 1}: quoted participant alias renders "
+                              f"with literal quotes — write the plain name")
         if is_flow:
             s = l.strip()
             if s.startswith("subgraph"):

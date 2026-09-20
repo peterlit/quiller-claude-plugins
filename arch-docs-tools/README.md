@@ -29,7 +29,8 @@ sub-agent per deliverable.
    relate, shared concepts and their sources of truth, a system-context
    diagram of external dependencies, and cross-deliverable inconsistencies.
 5. **Scripted validation** — `mermaid_lint.py` catches the classic generated
-   Mermaid failures (unknown diagram types, unbalanced brackets, unquoted
+   Mermaid failures (unknown diagram types, unbalanced brackets, semicolons
+   in sequence text, quoted participant aliases, unquoted
    labels, subgraph/end mismatch) and `coverage_check.py` cross-checks the
    module inventory against the real source tree, reporting unmentioned
    files largest-first. Agents fix their own documents until clean; residual

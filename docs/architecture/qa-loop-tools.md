@@ -291,9 +291,9 @@ sequenceDiagram
     participant H as Human
     participant HK as Hooks
     participant O as Orchestrator
-    participant S as "Loop scripts"
-    participant FR as "Fix reviewer agent"
-    participant T as "Tester agent"
+    participant S as Loop scripts
+    participant FR as Fix reviewer agent
+    participant T as Tester agent
     H->>O: Start the loop with settings
     HK-->>O: Warn if the session is large
     Note over HK: Advisory only. Silent once the human has accepted the cost for this loop (0.15.0).
@@ -327,10 +327,10 @@ Sources: `SKILL.md` Stage 0 and "Each round" step 4 (parallel branch), `scripts/
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant P as "Provisioner script"
+    participant P as Provisioner script
     participant SIM as Simulator
-    participant D as "Driver server (XCUITest)"
-    participant T as "Tester agent"
+    participant D as Driver server (XCUITest)
+    participant T as Tester agent
     O->>P: Provision worker simulators
     P->>SIM: Pick newest runtime and iPhone
     loop each worker slot
@@ -343,7 +343,7 @@ sequenceDiagram
     end
     P->>SIM: Delete this repo's surplus workers
     P-->>O: Worker manifest with names and udids
-    Note over P: Workers are namespaced by a hash of the repo path; the manifest lives in the loop's scratch dir.
+    Note over P: Workers are namespaced by a hash of the repo path — the manifest lives in the loop's scratch dir.
     O->>O: Copy the driver into loop state
     loop each worker
         O->>D: Build once and start serving
@@ -368,8 +368,8 @@ Sources: `scripts/plan_round.py` (whole file), `SKILL.md` "Each round" step 3.
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant P as "Planner script"
-    participant L as "Loop state (disk)"
+    participant P as Planner script
+    participant L as Loop state (disk)
     participant G as Git
     O->>P: Plan the round's chunks
     P->>L: Read test cases and workflow paths
@@ -402,10 +402,10 @@ Sources: `SKILL.md` "Each round" step 4, `scripts/dispatch_stamp.sh` (count at l
 sequenceDiagram
     participant O as Orchestrator
     participant HK as Hooks
-    participant T as "Tester agent"
-    participant DC as "Driver client"
-    participant DS as "Driver server (XCUITest)"
-    participant L as "Loop state (disk)"
+    participant T as Tester agent
+    participant DC as Driver client
+    participant DS as Driver server (XCUITest)
+    participant L as Loop state (disk)
     O->>L: Rotate notes, extract region findings brief
     O->>O: Verify device exists, reset app
     O->>L: Mark the testing phase
@@ -420,7 +420,7 @@ sequenceDiagram
         T->>DC: Capture screenshot evidence at checkpoints
         T->>L: Append finding to partial fragment
     end
-    Note over DC,DS: Mailbox = numbered command and reply files in a per-device temp dir; one server per udid.
+    Note over DC,DS: Mailbox = numbered command and reply files in a per-device temp dir — one server per udid.
     T->>L: Finalize fragment and results
     T-->>O: Two-line summary
     HK-->>L: Hook clears mark when last agent returns
@@ -439,9 +439,9 @@ Sources: `SKILL.md` "Each round" steps 6–7, `scripts/merge_ledger.py` default 
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant M as "Merge scripts"
-    participant MT as "Metrics script"
-    participant L as "Loop state (disk)"
+    participant M as Merge scripts
+    participant MT as Metrics script
+    participant L as Loop state (disk)
     loop each findings fragment
         O->>M: Merge findings into the ledger
         M->>L: Load ledger findings by id
@@ -475,10 +475,10 @@ Sources: `SKILL.md` "Each round" step 9b, `agents/qa-implementer.md`, `scripts/c
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant I as "Implementer agent"
+    participant I as Implementer agent
     participant HK as Hooks
-    participant X as "Xcode and git"
-    participant L as "Loop state (disk)"
+    participant X as Xcode and git
+    participant L as Loop state (disk)
     O->>L: Extract the open auto findings brief
     O->>L: Mark the implementing phase
     O->>I: Dispatch findings, evidence, tester summaries
@@ -511,11 +511,11 @@ Sources: `SKILL.md` "Each round" steps 9c–9d, `agents/fix-reviewer.md` FIX REV
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant R as "Fix reviewer agent"
+    participant R as Fix reviewer agent
     participant G as Git
-    participant L as "Loop state (disk)"
+    participant L as Loop state (disk)
     participant H as Human
-    participant N as "Next-round agents"
+    participant N as Next-round agents
     O->>L: Mark the fix-review phase
     O->>R: Dispatch sha range and claimed changes
     R->>G: Read the round's raw diff
@@ -536,7 +536,7 @@ sequenceDiagram
     O-->>H: Print one line per rejection
     O->>N: Next brief carries the rejections
     O->>N: Tester re-runs repros to mint fixed
-    Note over N: The reviewer never mints fixed; only an on-device test pass does.
+    Note over N: The reviewer never mints fixed — only an on-device test pass does.
 ```
 
 The four lenses are scored metrics and incentives, persisted state, behaviour contracts, and "was the finding a trap" (`agents/fix-reviewer.md`). A rejected fix leaves the finding `open` with a `FIX REJECTED (round N): …` note; that note is the next implementer's brief and tells it not to resubmit the same approach.
@@ -549,9 +549,9 @@ Sources: `SKILL.md` "Each round" step 9a and "Final report" (UX PROPOSALS), `age
 sequenceDiagram
     participant H as Human
     participant O as Orchestrator
-    participant R as "Fix reviewer agent"
-    participant I as "Implementer agent"
-    participant L as "Loop state (disk)"
+    participant R as Fix reviewer agent
+    participant I as Implementer agent
+    participant L as Loop state (disk)
     H->>L: Flip a proposal's routing to auto
     Note over H,L: The one sanctioned hand edit of the ledger.
     H->>O: Re-run the loop
@@ -579,11 +579,11 @@ Sources: `SKILL.md` "Each round" step 8, `agents/regression-test-writer.md`, `sc
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant W as "Regression writer agent"
-    participant S as "App source and project"
+    participant W as Regression writer agent
+    participant S as App source and project
     participant SIM as Simulator
     participant HK as Hooks
-    participant L as "Loop state (disk)"
+    participant L as Loop state (disk)
     Note over O: Only when regression tests are enabled and this round's test pass verified a bug fixed.
     opt first regression dispatch of this loop
         O->>L: Scan archived ledgers for untested fixes
@@ -619,12 +619,12 @@ Sources: `SKILL.md` "Each round" step 4 (single-tester branch) and step 5 (perf 
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant SM as "Sampler script"
+    participant SM as Sampler script
     participant SIM as Simulator
-    participant T as "Tester agent"
-    participant DC as "Driver client"
-    participant A as "Analyzer script"
-    Note over O: Parallel mode shuts down all workers but one first; the functional lane never samples.
+    participant T as Tester agent
+    participant DC as Driver client
+    participant A as Analyzer script
+    Note over O: Parallel mode shuts down all workers but one first — the functional lane never samples.
     O->>SM: Start sampling the app in background
     loop every two seconds until stopped
         SM->>SIM: Resolve the app's process id
@@ -655,9 +655,9 @@ Sources: `scripts/qa_metrics.py`, `SKILL.md` "Each round" step 9 and "Final repo
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant M as "Metrics script"
-    participant R as "Report script"
-    participant L as "Loop state (disk)"
+    participant M as Metrics script
+    participant R as Report script
+    participant L as Loop state (disk)
     participant H as Human
     participant SIM as Simulator
     O->>M: Compute the round verdict
@@ -692,10 +692,10 @@ Sources: `scripts/loop_guard.sh` (lines 39–42), `scripts/read_guard.sh` (data 
 
 ```mermaid
 sequenceDiagram
-    participant A as "Orchestrator or subagent"
-    participant CC as "Claude Code harness"
+    participant A as Orchestrator or subagent
+    participant CC as Claude Code harness
     participant HK as Hooks
-    participant L as "Loop state (disk)"
+    participant L as Loop state (disk)
     rect rgb(245,245,245)
         Note over A,L: 1 - first dispatch in a large session
         A->>CC: First agent dispatch of the loop
@@ -738,11 +738,11 @@ Sources: `drivers/ios-xcuitest/start.sh`, `Sources/QADriver.swift`, `qa.py`, `st
 
 ```mermaid
 sequenceDiagram
-    participant C as "Caller (orchestrator or tester)"
-    participant LS as "Driver launcher script"
-    participant X as "Xcode build"
-    participant DS as "Driver server (XCUITest)"
-    participant DC as "Driver client"
+    participant C as Caller (orchestrator or tester)
+    participant LS as Driver launcher script
+    participant X as Xcode build
+    participant DS as Driver server (XCUITest)
+    participant DC as Driver client
     C->>LS: Start the driver for a device
     alt a runner is already serving this device
         LS-->>C: Already serving
@@ -752,7 +752,7 @@ sequenceDiagram
     end
     opt no cached build
         LS->>X: Build the test runner once
-        Note over X: The build is cached under the driver copy; the marker is written only if the runner app exists.
+        Note over X: The build is cached under the driver copy — the marker is written only if the runner app exists.
     end
     LS->>LS: Clear the mailbox, record bundle id
     LS->>X: Launch the serving test in background
@@ -769,11 +769,11 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant C as "Caller (orchestrator or tester)"
-    participant DC as "Driver client"
-    participant DS as "Driver server (XCUITest)"
-    participant APP as "Target app"
-    participant LS as "Driver launcher script"
+    participant C as Caller (orchestrator or tester)
+    participant DC as Driver client
+    participant DS as Driver server (XCUITest)
+    participant APP as Target app
+    participant LS as Driver launcher script
     C->>DC: Launch the app with environment
     DC->>DS: Send command via mailbox
     Note over DC,DS: Mailbox = numbered command and reply files under a per-device temp dir, written as tmp then renamed.

@@ -29,10 +29,42 @@ directory you are given — never source code.
 
 ## Diagram rules
 
-Use Mermaid for all diagrams — flowchart/architecture, sequenceDiagram, and
-erDiagram as appropriate. Prefer several focused diagrams over one sprawling
-one; any diagram beyond ~12 nodes should be split. Quote flowchart labels
-containing special characters.
+Use Mermaid for all diagrams. Prefer several focused diagrams over one
+sprawling one; any diagram beyond ~12 nodes should be split. Every diagram
+is one of two classes, and the class decides its vocabulary:
+
+**High-level diagrams** — sequence diagrams of flows, and flowcharts that
+show how the system works (top-level architecture, a decision process).
+These are read by someone who does not know the code yet, so they speak
+plain English:
+- Participants and nodes are ROLES in plain words (`Orchestrator`,
+  `Reviewer agent`, `Ledger scripts`, `Hooks`, `Loop state (disk)`,
+  `Git`, `Human`) — never script or file names. At most SIX participants
+  per sequence diagram; split the scenario if it needs more.
+- Every message is a high-level action of at most EIGHT words
+  (`Merge findings into the ledger`, `Mark a dispatch in flight`). No
+  shell commands, flags, file paths, JSON keys, script or verb names in
+  messages. A detail that matters goes in a `Note` line (one short
+  sentence) or in the "Sources:" prose under the diagram, which is where
+  file paths and line numbers belong.
+- Collapse mechanical plumbing into one or two messages; use `alt`/`loop`
+  only where branches lead to genuinely different outcomes. Aim for 8–16
+  messages.
+- Sequence participant aliases are written WITHOUT quotes
+  (`participant O as Orchestrator`) — Mermaid renders quoted aliases with
+  literal quotes. Never put a semicolon in Note or message text: it is a
+  statement separator and breaks the parse (the lint flags both).
+
+**Detailed diagrams** — erDiagrams of the data model, hook-wiring and
+file/state-layout flowcharts, module-dependency graphs. These are read by
+someone about to edit the code, so precise identifiers are the point:
+real file names, verb and field names, hook event names. In flowcharts,
+quote any label containing special characters (`["merge_ledger.py (verbs)"]`).
+
+Never mix the classes: a sequence diagram with `merge_ledger.py next-round`
+as a message, or a data-model diagram with "the ledger" as an entity, is
+the failure mode (measured: a first pass produced 221 messages carrying
+script names, flags or paths, and the reader asked for a rewrite).
 
 ## DETAIL mode (one deliverable)
 
@@ -45,8 +77,9 @@ stats, the output file path, and the script paths. Structure the document:
    purpose, its public interface (key exports/functions/endpoints), the
    design patterns it uses, its dependencies, how it interacts with other
    modules, and its primary file path(s).
-3. Sequence diagrams for the 3-5 most important or most complex flows
-   (e.g. auth, the core user workflow, data sync).
+3. Sequence diagrams (high-level class) for the 3-5 most important or most
+   complex flows (e.g. auth, the core user workflow, data sync) — more when
+   the dispatch asks for scenario coverage.
 4. If there is a persistent data model: an entity-relationship diagram.
 5. "State of the architecture" — a candid maintainer-facing section: design
    decisions and their apparent rationale (inferred from history where not

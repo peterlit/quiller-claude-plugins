@@ -32,14 +32,14 @@ first two diagnostics run before a human reads a word.
 
 ```mermaid
 sequenceDiagram
-    participant L as "Loop skill (report stage)"
-    participant F as "/<plugin>:feedback"
-    participant Q as "FIELD-QUESTIONS.md (shipped)"
-    participant U as "loop_usage.py (shipped)"
-    participant H as "Host repo .<loop>/feedback/"
-    participant D as "~/.local/share/quiller/inbox/"
-    participant I as "tools/ingest_feedback.py (this repo)"
-    participant M as "Maintainer session"
+    participant L as Loop skill (report stage)
+    participant F as /<plugin>:feedback
+    participant Q as FIELD-QUESTIONS.md (shipped)
+    participant U as loop_usage.py (shipped)
+    participant H as Host repo .<loop>/feedback/
+    participant D as ~/.local/share/quiller/inbox/
+    participant I as tools/ingest_feedback.py (this repo)
+    participant M as Maintainer session
     L->>H: run-summary.json (automatic, F1)
     L-->>F: one-line invitation, never a gate
     F->>U: effective tokens per role (--since loop start)
