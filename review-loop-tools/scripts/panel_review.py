@@ -4,7 +4,8 @@ blind verifier adjudicates before anything reaches the ledger.
 
 Usage:
   panel_review.py probe [<panel.json>] [--smoke]
-  panel_review.py run <loop-dir> <round>
+  panel_review.py run <loop-dir> <round> [--lanes a,b] [--force] [--detach]
+  panel_review.py wait <loop-dir> <round> [--timeout <s>]
   panel_review.py consent-path [<loop-dir>]
 
 probe: report which lanes are installed and whether their auth looks usable.
@@ -20,6 +21,31 @@ the repo root) so the smoke exercises the CONFIGURED lanes, not defaults.
 run: read <loop-dir>/panel.json, build one diff-only prompt from the round's
 briefs/round-<N>.stat + .diff plus the shared template, and run every enabled
 lane (lanes may set "enabled": false) in parallel with a per-lane timeout.
+`--lanes a,b` runs only the named lanes; a lane whose candidates file for
+the round already exists is reported `cached` and not re-run unless
+`--force` (an operational rerun to recover two failed lanes must not
+overwrite the good one — measured). `--detach` forks the run and returns at
+once with the pid and the summary path (fragments/panel/round-<N>.run.json,
+always written); `wait` blocks on that file under the Bash tool's ceiling
+and prints it — lane timeouts above 600s no longer need a hand-rolled
+nohup. An EMPTY round diff is refused (exit 2): a failed `diff` verb once
+left a 0-line file and every lane reported `ok, filed: 0` — a no-op that
+looked like a clean pass. Every non-ok lane gets one stderr line with a
+classified reason FIRST (quota / model-unavailable / auth / launch /
+timeout / no-json / other) — the raw CLI line that mattered used to sit
+past the note's 200-char cut. Exit code stays 0: lane failures are soft by
+design, never blocking a round; the JSON carries `failed` and `skipped`
+counts. A lane may list several `model`s; on quota or model-unavailable
+errors the next entry is tried and `model_used` is recorded. Precision
+controls from measured kept-rates (a local lane once filed 40 candidates
+across four passes with 0 kept): on the `final` pass a lane whose round-0
+tally shows filed >= 5 and kept = 0 is capped at 3 candidates (disclosed as
+`cap`), and a lane whose tallies were 0/N (filed >= 5) in the two most
+recent archived loops is `disabled-by-precision` until the lane sets
+`"precision_override": true`. Candidates whose every evidence path lies
+outside the round's changed-file list are dropped before the verifier ever
+reads them (`dropped_no_evidence`): the lanes saw only the diff, so a
+citation outside it is noise by construction.
 Each lane writes fragments/panel/round-<N>-<lane>.candidates.json (top 10
 findings by confidence — the flood cap) and its raw output to
 fragments/panel/round-<N>-<lane>.raw.txt for debugging. (fragments/panel/ is
@@ -62,13 +88,51 @@ status — the panel-verifier
 agent verifies them against the code and only the skeptical-reviewer (the
 chair) ever writes the ledger fragment.
 """
-import concurrent.futures, contextlib, hashlib, ipaddress, json, os, re, shutil
-import signal, subprocess, sys, tempfile
+import concurrent.futures, contextlib, glob, hashlib, ipaddress, json, os, re
+import shutil, signal, subprocess, sys, tempfile, time
 import urllib.error, urllib.parse, urllib.request
 
 SEVERITIES = {"blocker", "major", "minor"}
 CAP = 10                      # top-N by confidence; the false-positive flood control
+PRECISION_CAP = 3             # final-pass cap for a lane that kept 0 of >=5 at seed
+PRECISION_MIN_FILED = 5       # a 0/N lane is only judged on N >= this
 CHARS_PER_TOKEN = 4           # rough cap arithmetic for max_diff_tokens
+
+# Env vars that inject code into a child interpreter before main(): an agent
+# CLI must never inherit the orchestrator's terminal wrapper (measured: a
+# stale NODE_OPTIONS --require killed both Node lanes at startup while the
+# probe had passed minutes earlier). Exact names plus the DYLD_/CLAUDE
+# prefixes.
+INJECT_ENV = {"NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE",
+              "PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "LD_PRELOAD",
+              "LD_LIBRARY_PATH"}
+INJECT_PREFIXES = ("CLAUDE", "DYLD_")
+
+# Failure classification: the ONE line a human needs goes first in the note.
+ERROR_KINDS = [
+    ("quota", re.compile(r"quota|429|RESOURCE_EXHAUSTED|rate.?limit|TerminalQuotaError", re.I)),
+    ("model-unavailable", re.compile(r"404|no longer available|model[^\n]{0,40}not (found|available|supported)|unknown model|NOT_FOUND", re.I)),
+    ("auth", re.compile(r"401|403|unauthori[sz]ed|not logged in|login|api.?key|PERMISSION_DENIED|credential", re.I)),
+    ("launch", re.compile(r"Cannot find module|command not found|No such file or directory|ENOENT|MODULE_NOT_FOUND|not recognized as", re.I)),
+]
+
+def classify_error(text):
+    """(kind, first_relevant_line) for a lane failure. 'other' when nothing
+    matches; the line is then the last non-empty one (CLIs put the cause
+    last)."""
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    for kind, rx in ERROR_KINDS:
+        for l in lines:
+            if rx.search(l):
+                return kind, l
+    return "other", (lines[-1] if lines else "")
+
+def error_note(text, fallback="nonzero exit"):
+    kind, line = classify_error(text)
+    head = line or fallback
+    rest = (text or "").strip()
+    note = head if head == rest else f"{head} | {rest}"
+    return kind, note[:200]
 
 def normalize_url(u):
     """Ollama's documented OLLAMA_HOST form is scheme-less (127.0.0.1:11434);
@@ -288,6 +352,7 @@ def probe(args):
     # panel would smoke the CLIs' DEFAULT models — a model the account
     # cannot access would gate green and then fail every round.
     panel_path = args[0] if args else os.path.join(".review-loop", "panel.json")
+    loop_dir = os.path.dirname(os.path.abspath(panel_path))
     out = {}
     try:
         panel = load_json(panel_path)
@@ -351,13 +416,54 @@ def probe(args):
     except Exception:
         local.update({"installed": False,
                       "hint": "ollama daemon not reachable at " + OLLAMA_URL})
+    if smoke and local.get("installed"):
+        # The local lane used to be listed, never exercised: a model that
+        # OOMs or clamps context gated green and failed in round 0.
+        ol = panel_lane_for(panel, "ollama")
+        if ol:
+            local["smoke"] = smoke_lane("ollama", ol)
     out["local"] = local
 
-    if panel:
+    issues = []
+    if panel and os.path.isdir(loop_dir):
+        # Consent is part of the gate: a remote lane configured without it
+        # is skipped at run time with only the run JSON saying why (measured:
+        # a re-keyed consent file after an upgrade silently halved a panel
+        # while the probe had just said both lanes were ok).
+        consent = load_consent(loop_dir)
+        cpath = consent_path(loop_dir)
         for lane in panel.get("lanes", []):
-            name = lane.get("name")
-            if name in out:
-                out[name]["configured"] = True
+            if not isinstance(lane, dict):
+                continue
+            name, kind = lane.get("name"), lane.get("type", lane.get("name"))
+            row = out.setdefault(name if name in out else
+                                 ("local" if kind == "ollama" else name), {})
+            row["configured"] = True
+            if not lane.get("enabled", True):
+                row["enabled"] = False
+                continue
+            needs_consent = kind in ("codex", "gemini") or \
+                (kind == "ollama" and not is_loopback(OLLAMA_URL))
+            if needs_consent:
+                if consent.get("remote_lanes_approved") is True:
+                    row["consent"] = "ok"
+                else:
+                    row["consent"] = f"MISSING — write remote_lanes_approved: true to {cpath}"
+                    issues.append(f"lane {name}: no remote-lane consent ({cpath})")
+            if kind == "cmd" and not cmd_approved(consent, lane.get("cmd", "")):
+                row["consent"] = "MISSING — command string not in cmd_lanes_approved"
+                issues.append(f"lane {name}: cmd not approved")
+            if not lane.get("precision_override") and precision_disabled(loop_dir, name):
+                row["precision"] = "disabled-by-precision (0 kept in the two most " \
+                                   "recent archived loops; set precision_override)"
+                issues.append(f"lane {name}: disabled by precision")
+            if row.get("smoke", "ok").startswith("failed"):
+                issues.append(f"lane {name}: smoke {row['smoke']}")
+            if row.get("installed") is False:
+                issues.append(f"lane {name}: CLI/daemon not installed")
+    out["gate_issues"] = issues
+    for i in issues:
+        print(f"panel_review: GATE — {i}", file=sys.stderr)
     print(json.dumps(out, indent=2))
 
 # ----------------------------------------------------------------- run -----
@@ -418,11 +524,28 @@ def extract_json(text):
         idx = text.find("{", end)
     return first
 
-def sanitize(obj, lane):
-    """Keep only well-formed candidates; sort by confidence; cap at CAP."""
+def evidence_in_scope(evidence, changed):
+    """True when at least one evidence entry names a file in the round's
+    changed-file list (tolerant of a/ b/ prefixes and partial paths). With
+    no list (older loop dirs) everything is in scope."""
+    if not changed:
+        return True
+    for e in evidence:
+        p = str(e).split(":")[0].strip()
+        p = re.sub(r"^[ab]/", "", p)
+        if not p:
+            continue
+        for c in changed:
+            if p == c or c.endswith("/" + p) or p.endswith("/" + c):
+                return True
+    return False
+
+def sanitize(obj, lane, changed=None, cap=CAP):
+    """Keep only well-formed candidates; drop citations outside the
+    changed-file list; sort by confidence; cap at `cap`."""
     if not isinstance(obj, dict) or not isinstance(obj.get("findings"), list):
         return None
-    keep = []
+    keep, dropped = [], 0
     for f in obj["findings"]:
         if not isinstance(f, dict):
             continue
@@ -441,6 +564,9 @@ def sanitize(obj, lane):
         ev = f.get("evidence")
         if not (isinstance(ev, list) and ev):
             continue
+        if not evidence_in_scope(ev, changed):
+            dropped += 1
+            continue
         try:
             conf = max(0.0, min(1.0, float(f.get("confidence", 0.5))))
         except (TypeError, ValueError):
@@ -451,9 +577,54 @@ def sanitize(obj, lane):
                      "confidence": conf,
                      "area": str(f.get("area", ""))[:80]})
     keep.sort(key=lambda f: -f["confidence"])
-    return {"lane": lane, "filed": len(keep[:CAP]),
-            "overflow_dropped": max(0, len(keep) - CAP),
-            "findings": keep[:CAP]}
+    out = {"lane": lane, "filed": len(keep[:cap]),
+           "overflow_dropped": max(0, len(keep) - cap),
+           "findings": keep[:cap]}
+    if dropped:
+        out["dropped_no_evidence"] = dropped
+    return out
+
+def changed_files(loop, rnd):
+    """The round's changed-file list written by the diff verb
+    (briefs/round-<N>.files: one path per line, excluded-but-changed paths
+    carry a tab-separated marker). None when absent."""
+    p = os.path.join(loop, "briefs", f"round-{rnd}.files")
+    if not os.path.exists(p):
+        return None
+    with open(p, encoding="utf-8", errors="replace") as fh:
+        return [l.split("\t")[0].strip() for l in fh if l.strip()]
+
+def seed_tally(loop):
+    """ledger['panel']['0'] of the CURRENT loop, for the final-pass cap."""
+    try:
+        led = load_json(os.path.join(loop, "ledger.json"), {}) or {}
+        t = (led.get("panel") or {}).get("0")
+        return t if isinstance(t, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+def lane_kept(t):
+    return t.get("confirmed", 0) + t.get("demoted", 0)
+
+def precision_disabled(loop, name):
+    """A lane that filed >= PRECISION_MIN_FILED with 0 kept in EVERY pass of
+    each of the two most recent ARCHIVED loops is disabled until the human
+    re-enables it (`precision_override: true`). Archives are named
+    <timestamp>-<sha>, so name order is time order."""
+    ledgers = sorted(glob.glob(os.path.join(loop, "archive", "*", "ledger.json")))[-2:]
+    if len(ledgers) < 2:
+        return False
+    for lp in ledgers:
+        try:
+            panel = (load_json(lp, {}) or {}).get("panel") or {}
+        except (ValueError, OSError):
+            return False
+        rows = [r.get(name) for r in panel.values()
+                if isinstance(r, dict) and isinstance(r.get(name), dict)]
+        if not rows or any(r.get("filed", 0) < PRECISION_MIN_FILED or lane_kept(r) > 0
+                           for r in rows):
+            return False
+    return True
 
 def jail_env(jail):
     """The jail hides the repo from the CLI's file tools, but the inherited
@@ -461,9 +632,32 @@ def jail_env(jail):
     a prompt-injected absolute-path read only needs the name. Point the pwd
     vars at the jail and drop the CLAUDE_* namespace; auth material (HOME,
     API keys, credential paths) stays so the lane can still log in."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    env = {k: v for k, v in os.environ.items()
+           if k not in INJECT_ENV and not k.startswith(INJECT_PREFIXES)}
     env["PWD"] = env["OLDPWD"] = jail
     return env
+
+def usage_from_text(text):
+    """Passive token capture for CLI lanes: whatever the CLI PRINTS about
+    usage is recorded, nothing is estimated. Looks for a JSON object holding
+    a 'usage' member (JSONL event streams) or a 'tokens used: N' style line.
+    None when the CLI exposes nothing (codex on a ChatGPT login exposes no
+    figures — the cost row stays blank by construction)."""
+    if not text:
+        return None
+    dec = json.JSONDecoder()
+    for m in re.finditer(r'\{[^\n]*"usage"', text):
+        try:
+            obj, _ = dec.raw_decode(text, m.start())
+        except json.JSONDecodeError:
+            continue
+        u = obj.get("usage") if isinstance(obj, dict) else None
+        if isinstance(u, dict) and any(isinstance(v, int) for v in u.values()):
+            return {k: v for k, v in u.items() if isinstance(v, int)}
+    m = re.search(r"tokens?\s+used[:\s]+([\d,]+)", text, re.I)
+    if m:
+        return {"total_tokens": int(m.group(1).replace(",", ""))}
+    return None
 
 def run_codex(lane, prompt, repo, timeout):
     # ABSOLUTE, because codex resolves this path against ITS cwd — the empty
@@ -488,6 +682,7 @@ def run_codex(lane, prompt, repo, timeout):
     with tempfile.TemporaryDirectory(prefix="panel-lane-") as jail:
         r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
                            timeout=timeout, cwd=jail, env=jail_env(jail))
+    lane["_usage"] = usage_from_text((r.stdout or "") + "\n" + (r.stderr or ""))
     if os.path.exists(out_file):
         with open(out_file, encoding="utf-8") as fh:
             return fh.read(), r
@@ -506,6 +701,7 @@ def run_gemini(lane, prompt, repo, timeout):
         env = dict(jail_env(jail), GEMINI_CLI_TRUST_WORKSPACE="true")
         r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
                            timeout=timeout, cwd=jail, env=env)
+    lane["_usage"] = usage_from_text((r.stdout or "") + "\n" + (r.stderr or ""))
     return r.stdout, r
 
 def ollama_need(prompt):
@@ -583,6 +779,8 @@ def run_ollama(lane, prompt, repo, timeout):
     # essentially the whole context was truncated (or left no room for the
     # response) — the silent failure the pre-check exists to prevent.
     pe = data.get("prompt_eval_count")
+    lane["_usage"] = {k: data[k] for k in ("prompt_eval_count", "eval_count")
+                      if isinstance(data.get(k), int)} or None
     if isinstance(pe, int) and pe >= need - 1024:
         # Keep the already-paid-for response for debugging even though the
         # lane fails (run_lane never reaches its own .raw.txt write).
@@ -656,6 +854,20 @@ def run_lane(lane, loop, rnd, repo, consent):
     os.makedirs(frag_dir, exist_ok=True)
     base = os.path.join(frag_dir, f"round-{rnd}-{safe_lane_name(name)}")
     lane["_out_base"] = base
+    out_path = base + ".candidates.json"
+    if os.path.exists(out_path) and not lane.get("_force"):
+        try:
+            prior = load_json(out_path, {}) or {}
+        except (ValueError, OSError):
+            prior = {}
+        return {"lane": name, "status": "cached", "filed": prior.get("filed", 0),
+                "candidates": out_path,
+                "note": "candidates already exist for this round; pass --force to rerun"}
+    if not lane.get("precision_override") and precision_disabled(loop, name):
+        return {"lane": name, "status": "disabled-by-precision",
+                "note": f"0 kept of >= {PRECISION_MIN_FILED} filed in each of the two "
+                        f"most recent archived loops; set \"precision_override\": true "
+                        f"on the lane to run it anyway"}
     # Consent gates by DESTINATION and capability, not lane type alone.
     # Grants are `is True`, never truthiness: the consent file is human-
     # edited, and "yes"/"false"/1 must not open remote egress.
@@ -681,38 +893,110 @@ def run_lane(lane, loop, rnd, repo, consent):
         return {"lane": name, "status": "skipped", "note": f"unknown type '{kind}'"}
     prompt, truncated = build_prompt(loop, rnd, int(lane.get("max_diff_tokens", 32000)))
     timeout = int(lane.get("timeout_s", 600))
-    try:
-        raw, proc = runner(lane, prompt, repo, timeout)
-    except subprocess.TimeoutExpired:
-        return {"lane": name, "status": "timeout", "timeout_s": timeout}
-    except Exception as e:
-        # ANY lane failure is soft — a misconfigured lane (missing cmd key,
-        # non-JSON from a proxy on OLLAMA_URL, …) must not abort the panel.
-        return {"lane": name, "status": "error",
-                "note": f"{type(e).__name__}: {e}"[:200]}
+    # Precision cap: a seed lane that kept nothing gets a smaller final voice.
+    cap, cap_reason = CAP, None
+    if str(rnd) == "final":
+        t = seed_tally(loop).get(name)
+        if isinstance(t, dict) and t.get("filed", 0) >= PRECISION_MIN_FILED and lane_kept(t) == 0:
+            cap, cap_reason = PRECISION_CAP, f"seed kept 0/{t.get('filed')}"
+    models = lane.get("model")
+    models = list(models) if isinstance(models, list) else [models]
+    t0 = time.monotonic()
+    result = {"lane": name}
+    raw = proc = None
+    for i, model in enumerate(models):
+        lane["model"] = model
+        lane.pop("_usage", None)
+        try:
+            raw, proc = runner(lane, prompt, repo, timeout)
+        except subprocess.TimeoutExpired:
+            result.update({"status": "timeout", "timeout_s": timeout, "error_kind": "timeout"})
+            break
+        except Exception as e:
+            # ANY lane failure is soft — a misconfigured lane (missing cmd key,
+            # non-JSON from a proxy on OLLAMA_URL, …) must not abort the panel.
+            kind, note = error_note(f"{type(e).__name__}: {e}")
+            result.update({"status": "error", "error_kind": kind, "note": note})
+        else:
+            if proc is not None and proc.returncode != 0:
+                kind, note = error_note((proc.stderr or "") + "\n" + (proc.stdout or ""))
+                result.update({"status": "error", "error_kind": kind, "note": note})
+            else:
+                result.pop("status", None)
+                break
+        if result.get("error_kind") in ("quota", "model-unavailable") and i + 1 < len(models):
+            print(f"panel_review: lane {name}: model {model!r} failed "
+                  f"({result['error_kind']}); trying {models[i + 1]!r}", file=sys.stderr)
+            continue
+        break
+    result["elapsed_s"] = round(time.monotonic() - t0, 1)
+    if len(models) > 1 or models[0]:
+        result["model_used"] = lane.get("model")
+    if lane.get("_usage"):
+        result["tokens"] = lane["_usage"]
+    if result.get("status"):
+        return result
     with open(base + ".raw.txt", "w", encoding="utf-8") as fh:
         fh.write(raw or "")
-    if proc is not None and proc.returncode != 0:
-        return {"lane": name, "status": "error",
-                "note": (proc.stderr or "nonzero exit").strip()[:200]}
-    cands = sanitize(extract_json(raw or ""), name)
+    cands = sanitize(extract_json(raw or ""), name, changed_files(loop, rnd), cap)
     if cands is None:
-        return {"lane": name, "status": "error",
-                "note": f"no parseable candidates JSON (raw kept at {base}.raw.txt)"}
+        result.update({"status": "error", "error_kind": "no-json",
+                       "note": f"no parseable candidates JSON (raw kept at {base}.raw.txt)"})
+        return result
     if truncated:
         cands["diff_truncated"] = True
-    out_path = base + ".candidates.json"
+    if cap_reason:
+        cands["cap"], cands["cap_reason"] = cap, cap_reason
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(cands, fh, indent=2)
         fh.write("\n")
-    return {"lane": name, "status": "ok", "filed": cands["filed"],
-            "overflow_dropped": cands["overflow_dropped"], "candidates": out_path}
+    result.update({"status": "ok", "filed": cands["filed"],
+                   "overflow_dropped": cands["overflow_dropped"], "candidates": out_path})
+    if cands.get("dropped_no_evidence"):
+        result["dropped_no_evidence"] = cands["dropped_no_evidence"]
+    if cap_reason:
+        result["cap"], result["cap_reason"] = cap, cap_reason
+    return result
+
+def summary_path(loop, rnd):
+    return os.path.join(loop, "fragments", "panel", f"round-{rnd}.run.json")
 
 def run(args):
-    if len(args) < 2:
-        print("usage: panel_review.py run <loop-dir> <round>", file=sys.stderr)
+    opts = {"lanes": None, "force": False, "detach": False}
+    pos = []
+    it = iter(args)
+    for a in it:
+        if a == "--lanes":
+            opts["lanes"] = [x.strip() for x in next(it, "").split(",") if x.strip()]
+        elif a.startswith("--lanes="):
+            opts["lanes"] = [x.strip() for x in a.split("=", 1)[1].split(",") if x.strip()]
+        elif a == "--force":
+            opts["force"] = True
+        elif a == "--detach":
+            opts["detach"] = True
+        else:
+            pos.append(a)
+    if len(pos) < 2:
+        print("usage: panel_review.py run <loop-dir> <round> [--lanes a,b] [--force] [--detach]",
+              file=sys.stderr)
         sys.exit(2)
-    loop, rnd = args[0], args[1]
+    loop, rnd = pos[0], pos[1]
+    if opts["detach"]:
+        # Re-exec ourselves without --detach in a new session; the summary
+        # file is the contract, stdout/stderr go to a log next to it.
+        os.makedirs(os.path.join(loop, "fragments", "panel"), exist_ok=True)
+        spath = summary_path(loop, rnd)
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(spath)   # a stale summary must never satisfy `wait`
+        log = spath[:-len(".json")] + ".log"
+        child = [sys.executable, os.path.abspath(__file__), "run"] + \
+                [a for a in args if a != "--detach"]
+        with open(log, "w") as lf:
+            p = subprocess.Popen(child, stdout=lf, stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL, start_new_session=True)
+        print(json.dumps({"detached": True, "pid": p.pid, "summary": spath, "log": log,
+                          "next": f"panel_review.py wait {loop} {rnd}"}))
+        return
     try:
         panel = load_json(os.path.join(loop, "panel.json"))
     except (ValueError, OSError) as e:
@@ -740,7 +1024,31 @@ def run(args):
             print(f"panel_review: missing briefs/{p} — run the diff verb first",
                   file=sys.stderr)
             sys.exit(1)
+    dpath = os.path.join(loop, "briefs", f"round-{rnd}.diff")
+    with open(dpath, encoding="utf-8", errors="replace") as fh:
+        head = fh.read(4096)
+    if "diff --git" not in head and not head.strip():
+        # A failed diff verb once left a 0-line file; every lane then
+        # reported ok/filed 0 — a no-op indistinguishable from a clean pass.
+        print(f"panel_review: briefs/round-{rnd}.diff is EMPTY — the diff verb "
+              f"failed or the range matched nothing; re-run "
+              f"`merge_ledger.py diff {loop} {rnd} <range>` and check its exit "
+              f"status before running the panel", file=sys.stderr)
+        sys.exit(2)
     lanes = panel["lanes"]
+    if opts["lanes"]:
+        want = set(opts["lanes"])
+        names = {l.get("name") for l in lanes if isinstance(l, dict)}
+        missing = sorted(want - names)
+        if missing:
+            print(f"panel_review: --lanes names not in panel.json: {missing}",
+                  file=sys.stderr)
+            sys.exit(2)
+        lanes = [l for l in lanes if isinstance(l, dict) and l.get("name") in want]
+    if opts["force"]:
+        for l in lanes:
+            if isinstance(l, dict):
+                l["_force"] = True
 
     def safe(l):   # one lane must never abort the map and lose the others
         try:
@@ -751,19 +1059,70 @@ def run(args):
             lname = l.get("name") if isinstance(l, dict) else str(l)[:64]
             return {"lane": lname, "status": "error",
                     "note": f"{type(e).__name__}: {e}"[:200]}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(lanes)) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(lanes))) as ex:
         results = list(ex.map(safe, lanes))
-    ok = [r for r in results if r["status"] == "ok"]
+    ok = [r for r in results if r["status"] in ("ok", "cached")]
+    failed = [r for r in results if r["status"] in ("error", "timeout")]
+    skipped = [r for r in results if r["status"] not in ("ok", "cached", "error", "timeout")]
+    for r in failed + skipped:
+        # One loud line per lane that produced nothing — the JSON is for
+        # scripts, this is for the orchestrator reading a terminal.
+        why = r.get("error_kind") or r["status"]
+        print(f"panel_review: lane {r['lane']} {r['status'].upper()} ({why}): "
+              f"{r.get('note', '')}", file=sys.stderr)
+    for r in results:
+        if r.get("cap"):
+            print(f"panel_review: lane {r['lane']} capped at {r['cap']} candidates "
+                  f"({r['cap_reason']})", file=sys.stderr)
     # rnd may be a label ("final" for the post-stop pass), not just a number.
-    print(json.dumps({"round": int(rnd) if str(rnd).isdigit() else rnd,
-                      "lanes": results,
-                      "candidates_files": [r["candidates"] for r in ok]}, indent=2))
+    summary = {"round": int(rnd) if str(rnd).isdigit() else rnd,
+               "lanes": results, "failed": len(failed), "skipped": len(skipped),
+               "candidates_files": [r["candidates"] for r in ok]}
+    text = json.dumps(summary, indent=2)
+    spath = summary_path(loop, rnd)
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    tmp = spath + ".partial"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text + "\n")
+    os.replace(tmp, spath)
+    print(text)
+
+def wait(args):
+    """`wait <loop-dir> <round> [--timeout s]`: block until the round's
+    run summary exists (written atomically by `run`) and print it. Default
+    timeout 540s — under the Bash tool's 600s ceiling — and exit 3 when it
+    elapses, so the orchestrator calls wait again instead of inventing
+    process management."""
+    pos, timeout = [], 540
+    it = iter(args)
+    for a in it:
+        if a == "--timeout":
+            timeout = float(next(it, "540"))
+        elif a.startswith("--timeout="):
+            timeout = float(a.split("=", 1)[1])
+        else:
+            pos.append(a)
+    if len(pos) < 2:
+        print("usage: panel_review.py wait <loop-dir> <round> [--timeout <s>]",
+              file=sys.stderr)
+        sys.exit(2)
+    spath = summary_path(pos[0], pos[1])
+    deadline = time.monotonic() + timeout
+    while not os.path.exists(spath):
+        if time.monotonic() >= deadline:
+            print(f"panel_review: no summary at {spath} after {timeout:g}s — the "
+                  f"run is still going (or never started); call wait again",
+                  file=sys.stderr)
+            sys.exit(3)
+        time.sleep(2)
+    with open(spath, encoding="utf-8") as fh:
+        print(fh.read().rstrip("\n"))
 
 def main():
-    verbs = {"probe": probe, "run": run, "consent-path": consent_path_cmd}
+    verbs = {"probe": probe, "run": run, "wait": wait, "consent-path": consent_path_cmd}
     if len(sys.argv) < 2 or sys.argv[1] not in verbs:
         print("\n".join(l.strip()
-                        for l in __doc__.strip().splitlines()[4:7]),
+                        for l in __doc__.strip().splitlines()[4:8]),
               file=sys.stderr)
         sys.exit(2)
     verbs[sys.argv[1]](sys.argv[2:])

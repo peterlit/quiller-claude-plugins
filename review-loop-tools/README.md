@@ -68,7 +68,7 @@ on different models, a partial guard against correlated blind spots.
 to, implementer/reviewer model diversity silently collapses — edit the reviewer's
 `model:` pin (in `agents/skeptical-reviewer.md`) to restore it.*
 
-## Multi-provider review panel (0.12.0, optional)
+## Multi-provider review panel (0.12.0, optional; 0.14.0 hardened from three field runs)
 
 Model pins decorrelate within one model family; the panel decorrelates
 across families. When enabled, external models — OpenAI's codex CLI,
@@ -131,8 +131,10 @@ unfiltered test runs, and whole-diff re-pulls during a loop (with the fix in
 its message); the round diff is materialized once (`diff` verb); rounds run
 the implementer's scoped `verify_cmd` and the full suite runs once at
 closeout; `next-round` folds merge + metrics + advance into one turn and an
-Agent-tool hook stamps `:dispatched`; a `session_guard` hook warns when a
-loop is started in a large session; minors skip rounds and go to closeout;
+Agent-tool hook stamps `:dispatched` (counting live dispatches, so two
+agents running at once no longer unmark each other); a `session_guard` hook
+warns when a loop is started in a large session and stands down once the
+human accepts the cost; minors skip rounds and go to closeout;
 scope mode defaults to 2 rounds with blocker escalation; `set-usage` records
 per-round tokens for a Tokens column and an optional `token_budget` stop.
 

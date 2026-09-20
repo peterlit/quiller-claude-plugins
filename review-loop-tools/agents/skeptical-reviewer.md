@@ -108,8 +108,25 @@ discipline applies: that device only.
 Mutation claims: manifest named in CHANGES → run `python3 <mutate.py> <manifest>`
 and judge from its output — and if the summary shows `errors > 0`, the kill
 count is UNVERIFIED: say so in the finding's note (a silent apply-error once
-let "8/8 killed" stand for a round). `null` → skip. Hotspot table given →
-start there. If the whole manifest cannot finish inside the 10-minute
+let "8/8 killed" stand for a round); a `baseline_red` exit means the gate
+itself is red or matches nothing — the implementer's count was never
+evidence. `null` → skip. Hotspot table given → start there. An
+implementer manifest that mutates only the BODIES it wrote is not evidence
+the call sites use them: write one or two CALL-SITE mutants of your own
+(the view's call to the new helper → the old path) and run them under the
+round's verify_cmd — measured on 2026-09-13 and 2026-09-19: both survived,
+both became findings. A mutant may carry its own `test_cmd`; keep that
+when you re-run.
+Panel findings handed to you (verified file named in your dispatch): fold
+them into your LEDGER with `source`/`sources` kept and mint IDs like any
+finding. When a verified panel finding restates one of YOURS, keep your ID
+and append its lanes to that finding's `sources` — never a second ID for
+the same defect. Read the verifier's `notes_for_chair` as leads, not
+findings.
+Device verification without a simulator control tool loaded: a scoped
+XCUITest you run for the round's touched screens is an acceptable — often
+better — check than a driven tap plus screenshot, and it doubles as the
+regression test; say which you did. If the whole manifest cannot finish inside the 10-minute
 command ceiling, split it into parts whose rows are VERBATIM copies and run
 each part in the foreground — never rewrite mutants, never background the
 run; the kill counts sum. (`"replacement": ""` is a valid mutant: it

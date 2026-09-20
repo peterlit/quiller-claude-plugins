@@ -71,7 +71,26 @@ After making changes:
   (measured: a round-1 manifest shipped a literal `<scratch>` placeholder in
   test_cmd and an empty replacement the old validator rejected; the round-2
   implementer self-ran unprompted and its manifest was clean). test_cmd must
-  be a real command — no placeholders.
+  be a real command — no placeholders. COMMIT FIRST, then run it: the
+  runner cuts its worktree from HEAD and now REFUSES uncommitted changes to
+  the manifest's files (a pre-commit run once reported every mutant
+  "survived" against the old code). It also runs each test_cmd unmutated
+  first and refuses a red baseline (a `-quiet` filter that matched nothing
+  once reported every mutant "killed"). Include ONE control mutant
+  (`expect: killed` on a line the tests certainly cover): it proves the
+  gate can fail. A mutant may carry its own `test_cmd` — give UI-only
+  mutants the UI gate and unit mutants the unit gate (measured: one shared
+  UI gate made a five-mutant manifest take 25 minutes).
+- Mutate CALL SITES, not only the bodies you wrote: a manifest that kills
+  4/4 inside your new helpers says nothing about whether the view calls
+  them — the reviewer will write call-site mutants of its own and file the
+  survivors (measured: twice, both became findings).
+- BACKLOG.md is never yours to edit, in rounds or in closeout. A fix you
+  decline as design-sized gets a sketch in
+  `.review-loop/briefs/round-<N>-punts.md` (closeout:
+  `briefs/closeout-punts.md`); the orchestrator copies sketches into
+  BACKLOG.md at record time (two rules once produced a round-1 BACKLOG edit
+  that closeout had to correct).
 - Long runs vs the 10-minute command ceiling: you MAY split a big manifest
   into scratch copies for your own pre-flight — but say so in CHANGES, and
   leave the named manifest INTACT and runnable as one file (the reviewer

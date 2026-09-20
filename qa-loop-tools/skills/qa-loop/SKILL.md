@@ -42,8 +42,10 @@ subagents. You are PLUMBING ONLY.
   EVERY dispatch, `:dispatched` is appended for you by a hook on the Agent
   tool (e.g. `round-2-testing:dispatched`):
   the Stop hook allows a legitimate wait while it is present, and the
-  SubagentStop hook strips it when the agent returns — so an ended turn
-  while the phase says "round…" without the suffix is a stall, not a wait.
+  SubagentStop hook strips it when the LAST live agent returns — the hooks
+  count live dispatches in `briefs/.dispatched`, so parallel testers no
+  longer unmark each other — so an ended turn while the phase says "round…"
+  without the suffix is a stall, not a wait.
   For waits that are not a subagent, use `…:waiting:<reason>` (see
   Waiting, failures, and pauses).
 - All loop state lives in the TARGET REPO at `.qa-loop/`. Never write it into
@@ -458,8 +460,9 @@ skew every metric downstream.
 
 ## Waiting, failures, and pauses (the phase marker is not a binary)
 - Three marker states: bare `round-N-…` = you owe a dispatch (the Stop hook
-  blocks); `…:dispatched` = an agent is running (stripped automatically when
-  it returns, including on failure); `…:waiting:<reason>` = you are honestly
+  blocks); `…:dispatched` = one or more agents are running (stripped
+  automatically when the last one returns, including on failure — a
+  counter in `briefs/.dispatched` tracks them); `…:waiting:<reason>` = you are honestly
   waiting on something that is NOT a subagent — a backoff, a background task,
   a human. The hooks never touch `:waiting:`; you clear it when you resume.
   Never re-stamp `:dispatched` with nothing running — use `:waiting:`.

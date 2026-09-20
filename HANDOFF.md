@@ -6,12 +6,18 @@ level (READMEs, CONTROLS.md, the SKILL.md files, and a rationale-dense git log).
 This file captures the *how we work* knowledge that previously lived only in
 the maintaining session's conversation history.
 
-State as of this writing (updated 2026-09-13): `review-loop-tools 0.13.0`,
-`qa-loop-tools 0.14.0`, `arch-docs-tools 0.1.0`, all committed and pushed to
-`github.com/peterlit/quiller-claude-plugins`, working tree clean. The 0.13.0
-pair digested the 2026-09-09 field reports (two qa 0.12.0 runs + one review
-0.10.0 run — see `docs/inbox/` and `docs/proposal-2026-09-09-field-reports.md`);
-qa 0.14.0 shipped the driver contract + `ios-xcuitest` backend.
+State as of this writing (updated 2026-09-20): `review-loop-tools 0.14.0`,
+`qa-loop-tools 0.15.0`, `arch-docs-tools 0.1.0`, committed locally (push
+pending). The 0.14.0/0.15.0 pair digested four review-loop 0.13.0 panel
+field reports (agents 1 and 2, 2026-09-13/19/20 — see `docs/inbox/` and
+`docs/proposal-2026-09-20-panel-field-reports.md`): panel gate honesty
+(consent in probe, injection-env scrub, local smoke, error classification),
+`run --lanes/--force/--detach` + `wait`, a live-dispatch counter behind
+`:dispatched`, position-anchored `read_guard`, live-only `commit_guard`,
+`mutate.py` baseline + dirty-tree refusal + per-mutant gate, tally merge
+with one definition of "kept", excluded-but-changed paths in the stat, and
+a closeout watch candidate. Before that: 0.13.0 digested the 2026-09-09
+reports; qa 0.14.0 shipped the driver contract + `ios-xcuitest` backend.
 
 ---
 
@@ -68,7 +74,10 @@ process is the most important thing to preserve:
    `session_guard.sh`, `commit_guard.sh`. CAVEAT (since 0.11.0's panel):
    `merge_ledger.py`, `render_report.py`, and `subagent_guard.sh` are no
    longer byte-identical — the review copies carry panel-only additions
-   (panel-tally, the Panel report section, the panel-namespace guard note).
+   (panel-tally with merge/`--replace`, the Panel report section with its
+   Duplicate column, the panel-namespace guard note). Since 0.14.0 the
+   hook pair `dispatch_stamp.sh`/`subagent_guard.sh` shares the
+   `briefs/.dispatched` counter — change them together, in both plugins.
    The rule now: apply every shared change IDENTICALLY to both copies in the
    common regions, and keep the divergence panel-only; `diff` between the
    copies must show nothing but panel code. (Resolving this properly — port
@@ -84,7 +93,16 @@ process is the most important thing to preserve:
    absolute `/Users/` paths (none allowed — everything must route through
    `${CLAUDE_PLUGIN_ROOT}` or per-repo state dirs).
 5. **Smoke-test every behavioral change against the exact reported failure
-   before shipping**, in a scratch directory outside the repo. This habit has
+   before shipping**, in a scratch directory outside the repo. Two
+   selftests now exist and both must pass before a commit:
+   `review-loop-tools/tests/panel_selftest.py` (hermetic, ~140 checks,
+   `REVIEW_LOOP_ARCHIVE_SETTLE_S=0` to skip the settle sleep) and
+   `review-loop-tools/tests/hooks_selftest.py` (runs the real hook scripts
+   against a tempdir loop). A smoke test that grants consent for a scratch
+   loop writes into the REAL `~/.config/review-loop-tools/consent/` when
+   `XDG_CONFIG_HOME` points inside the scratch repo (the containment check
+   rejects it) — point XDG at a SIBLING of the scratch repo, and delete any
+   stray consent file afterwards. This habit has
    caught shipped-bug candidates repeatedly (simulator device-type ordering,
    region prefix-matching, set-usage accumulation). When testing Python that
    was just edited, set `PYTHONDONTWRITEBYTECODE=1` — a stale `.pyc` once
@@ -201,18 +219,26 @@ accounts**, so its remaining content is summarized here:
   below moves into that file and this section keeps only a pointer.
   Revised 2026-09-20 against the panel field reports (cross-report
   dedupe, two schema sections, per-dispatch wall-clock from the hooks).
-- **Proposed 2026-09-20, awaiting approval — review-loop-tools 0.14.0 /
-  qa-loop-tools 0.15.0** (`docs/proposal-2026-09-20-panel-field-reports.md`):
-  digest of three review-loop 0.13.0 panel runs (agents 1 and 2, all on the
-  current version). Headline items: panel probe checks consent and scrubs
-  `NODE_OPTIONS`; `run --lanes`/`--detach`/`wait`; a live-dispatch counter
-  behind `:dispatched`; `read_guard` matching command position; `mutate.py`
-  baseline run and dirty-tree refusal; tally merge and one definition of
-  "kept". Its five judgment calls and the feedback proposal's five were
-  all resolved by interview on 2026-09-20 (recommended options); both
-  proposals still await the explicit build approval.
+- **SHIPPED 2026-09-20 — review-loop-tools 0.14.0 / qa-loop-tools 0.15.0**
+  (`docs/proposal-2026-09-20-panel-field-reports.md`, built autonomously on
+  Peter's "incorporate feedback autonomously and proceed"; a fourth report
+  the same day added A14 excluded-paths visibility and A15 live-only commit
+  guard). Deferred from it: synced-volume `.nosync` scratch isolation and
+  active codex/gemini token capture (BACKLOG). The agent-feedback process
+  proposal is still awaiting its build approval; its five judgment calls
+  are resolved.
 
-**Watch items for the next field reports** (post-0.13.0/0.14.0): the shipped
+**Watch items for the next field reports** (post-0.14.0/0.15.0, review):
+the dispatch counter under overlapping dispatches (no `:waiting:` needed by
+hand); a quota lane failing over to its fallback model with `model_used`
+recorded; the final-pass cap firing on a 0/N lane and the cross-loop
+`disabled-by-precision` after the second such loop; the EXCLUDED stat
+trailer ending "was not updated" candidates; `run` refusing an empty diff
+in the wild; `duplicate_of`/`notes_for_chair` actually used by the
+verifier; late iCloud duplicates caught by the settle pass; the `suites`
+table appearing in a closeout; `mutate.py` baseline-red or dirty refusals
+and whether `--allow-dirty` gets abused; token counts appearing for any
+CLI lane. **Watch items (post-0.13.0/0.14.0, qa)**: the shipped
 driver building and serving on a field rig (first non-Causeway app); the
 Stage-0 grant probe catching an ungranted worker BEFORE wave 1; namespaced
 worker reuse actually preserving grants across loops; a `WF-<n><letter>`

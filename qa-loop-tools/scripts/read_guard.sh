@@ -34,6 +34,18 @@ def nlines(path):
     except Exception:
         return 0
 
+# Match COMMAND POSITIONS, not command text: a heredoc that merely wrote an
+# xcodebuild string into a JSON brief was denied as an "unfiltered test run"
+# (measured), which trains agents to route around the guard. Heredoc bodies
+# and single-quoted strings are data — strip them before any pattern runs.
+def strip_data(c):
+    c = re.sub(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?^\s*\2\s*$", "<<HEREDOC",
+               c, flags=re.S | re.M)
+    c = re.sub(r"'[^']*'", "''", c)
+    return c
+cmd = strip_data(cmd)
+CMD_START = r"(?:^|[;&|(]\s*|\$\(\s*|\bthen\s+|\bdo\s+|\bexec\s+|\btime\s+)"
+
 filtered = bool(re.search(r"\|\s*(grep|rg|head|tail|sed|awk|wc|cut|sort|uniq|xcpretty|xcbeautify|tee|python3|jq)\b", cmd)) \
     or bool(re.search(r"(?<![<>])>\s*[^\s&|]", cmd))
 
@@ -54,14 +66,14 @@ if not filtered:
         deny(f"`sed -n {m.group(1)},{m.group(2)}p` is a {int(m.group(2)) - int(m.group(1))}-line "
              f"window. Keep windows <=120 lines; locate with `grep -n` first.")
 
-if re.search(r"\bxcodebuild\b[^|]*\btest\b|\bswift\s+test\b", cmd) and not filtered:
+if re.search(CMD_START + r"(?:xcrun\s+)?xcodebuild\b[^|;&]*\btest\b|" + CMD_START + r"swift\s+test\b", cmd) and not filtered:
     deny("full test output lands in context (one unfiltered app-suite run measured at "
          "~150K tokens). Append `2>&1 | grep -E 'error:|failed|Executed|passed|Test Suite'`, "
          "or redirect to a file and grep it. Run the scoped verify_cmd in rounds; the full "
          "suite runs once, at closeout.")
 
 m = re.match(r"round-(\d+)-", phase)
-if m and re.search(r"\bgit\s+(diff|show)\b", cmd) and not filtered \
+if m and re.search(CMD_START + r"git\s+(diff|show)\b", cmd) and not filtered \
         and not re.search(r"--(stat|numstat|name-only|shortstat)\b", cmd) \
         and not re.search(r"\s--\s+\S", cmd):
     n = m.group(1)

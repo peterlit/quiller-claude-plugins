@@ -16,24 +16,33 @@ if command -v jq >/dev/null 2>&1 && [ -n "$input" ]; then
   cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 fi
 
-# Staging discipline — active only while a loop is live (.phase exists).
-# The loop-dir .gitignore allowlist decides what belongs in git; -A/-f/
-# directory adds are how scratch enters history (measured: a committed
-# "fragments 2/" and a tracked .pyc in one host repo). Stage named files.
+# Staging discipline — active only while a loop is LIVE: .phase says
+# round*/seed*/awaiting-human. A finished loop leaves .phase at "done" and
+# the guard used to fire on it for weeks with a message claiming a loop was
+# running (measured). The loop-dir .gitignore allowlist decides what
+# belongs in git; -A/-f/directory adds are how scratch enters history
+# (measured: a committed "fragments 2/" and a tracked .pyc in one host
+# repo). Stage named files.
+live=0
 if [ -n "$loopdir" ] && [ -f "$loopdir/.phase" ]; then
+  case "$(cat "$loopdir/.phase")" in
+    round*|seed*|awaiting-human*) live=1 ;;
+  esac
+fi
+if [ "$live" -eq 1 ]; then
   case "$cmd" in
     *"git add"*)
       ldre="$(printf '%s' "$loopdir" | sed 's/\./\\./g')"
       if printf '%s' "$cmd" | grep -qE 'git add[^|;&]*[[:space:]](-A|--all)([[:space:]]|$)'; then
-        echo "commit_guard: 'git add -A/--all' is blocked during a loop — stage the exact files you changed by path" >&2
+        echo "commit_guard: 'git add -A/--all' is blocked while a loop is live (${loopdir}/.phase in flight) — stage the exact files you changed by path" >&2
         exit 2
       fi
       if printf '%s' "$cmd" | grep -qE 'git add[^|;&]*[[:space:]](-f|--force)([[:space:]]|$)'; then
-        echo "commit_guard: 'git add -f' is blocked during a loop — if the allowlist ignores it, it is scratch and stays out of git" >&2
+        echo "commit_guard: 'git add -f' is blocked while a loop is live — if the allowlist ignores it, it is scratch and stays out of git" >&2
         exit 2
       fi
       if printf '%s' "$cmd" | grep -qE 'git add[^|;&]*[[:space:]]\.(/)?([[:space:]]|$|;)'; then
-        echo "commit_guard: 'git add .' is blocked during a loop — stage the exact files you changed by path" >&2
+        echo "commit_guard: 'git add .' is blocked while a loop is live (${loopdir}/.phase in flight) — stage the exact files you changed by path" >&2
         exit 2
       fi
       if printf '%s' "$cmd" | grep -qE "git add[^|;&]*[[:space:]](\./)?${ldre}(/)?([[:space:]]|\$|;)"; then

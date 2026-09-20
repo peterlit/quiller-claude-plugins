@@ -1,6 +1,6 @@
 # Proposal: review-loop-tools 0.14.0 (+ qa-loop-tools 0.15.0 mirror) — 2026-09-13/19 panel field reports
 
-Written 2026-09-20. Status: **proposed, awaiting approval; nothing built.**
+Written 2026-09-20. Status: **BUILT and shipped 2026-09-20 as review-loop-tools 0.14.0 / qa-loop-tools 0.15.0** (Peter: "incorporate feedback autonomously and proceed to build 0.14.0"). A fourth report arrived the same day and is folded in below as A14–A15 plus additions to A2, A5 and A10.
 
 Sources (committed in `docs/inbox/`), with item IDs in the scheme from
 `docs/proposal-agent-feedback-process.md` (`<plugin>-<version>-<date>-<host>-<n>`,
@@ -15,6 +15,13 @@ numbered in each report's own impact order):
 - `loop-tooling-feedback-2026-09-19.md` — agent 1 (weatherapp), review-loop-tools
   **0.13.0**, second panel run. Converged r1, 7 minors. 391,849 reported.
   Items `rl-0.13.0-20260919-weatherapp-1..7`.
+- `review-loop-0.13.0-feedback-oct-pool.md` — agent 2 (cardgame), review-loop-tools
+  **0.13.0**, second panel run (2026-09-20). Converged r1, 9 findings (1
+  major the chair found and 32 panel candidates missed), 3.22M effective.
+  Items `rl-0.13.0-20260920-cardgame-1..9`. Repeats -4 (marker), -3 (0/40
+  lane), -7 (detach), -8 (closeout diff), -9 (`NODE_OPTIONS`); new: -1
+  (excludes blind the panel), -2 (empty diff accepted), -5 (commit guard
+  arms on `done`).
 - `qa-loop-decisions-2026-09-09.md` — agent 1's decision record for the qa
   0.12.0 run already digested in 0.13.0. No new plugin defects; D5 (workers
   ungranted) and D7 (budget raised mid-run) confirm A1 and the budget doctrine.
@@ -263,6 +270,25 @@ their JSON output when a documented flag exposes them (captured as
 `tokens: {…}` or absent — never estimated). Feeds the feedback bundle's
 run summary.
 
+### A14. Excluded-but-changed paths are visible to every reader
+
+`rl-0.13.0-20260920-cardgame-1`. The `diff` verb also runs an unfiltered
+`--name-only` over the range and writes `briefs/round-N.files` (every
+changed path; hidden ones carry a tab-separated marker) and appends an
+`EXCLUDED (changed in range; not shown in this view)` trailer to the
+`.stat` — which `build_prompt` already embeds, so lanes see it, and the
+verifier prompt tells the verifier to read it before adjudicating any "X
+was not updated" claim. `run` refuses an empty diff (exit 2) and `diff`
+removes its partial files and exits 1 on a git failure
+(`rl-0.13.0-20260920-cardgame-2`), so a chained `&&` stops. The `.files`
+list is also what A5.1's evidence pre-filter matches against.
+
+### A15. `commit_guard` arms only while a loop is live
+
+`rl-0.13.0-20260920-cardgame-5`. The staging rules fire only when `.phase`
+reads `round*`, `seed*` or `awaiting-human*`; a finished loop's `done` arms
+nothing, and the message now says "while a loop is live". Mirrored to qa.
+
 ### A13. Skill and prompt lines
 
 - One BACKLOG rule (`rl-0.13.0-20260913-cardgame-8`): implementers never
@@ -279,9 +305,10 @@ run summary.
 
 ## Part B — qa-loop-tools 0.15.0 (mirror release, no qa-specific behavior)
 
-A3, A6, A7 (hook scripts, byte-identical), A9 and A10 (`merge_ledger.py`
-common regions), A11's `closeout_start_sha` only if the qa verb set gains
-closeout (it does not; skip). `subagent_guard.sh` keeps its panel-namespace
+A3, A6, A7, A15 (hook scripts, byte-identical), A9, A10, A14 and A11's
+`round_end_shas` (`merge_ledger.py`/`render_report.py` common regions —
+the closeout candidate renders only when a closeout fragment exists, which
+qa never writes). `subagent_guard.sh` keeps its panel-namespace
 comment divergence. Diff between the copies must still show panel-only
 code (HANDOFF §2.2).
 
@@ -344,8 +371,30 @@ proposal as written above is the approved shape; build awaits the explicit
 - **J5. `--detach`/`wait` verbs vs. documenting `nohup`.** Verbs cost ~40
   lines and a selftest; documentation costs a paragraph and leaves process
   management to each orchestrator. Recommend the verbs.
+- **J6 (decided autonomously, 2026-09-20 build).** Cross-run precision
+  disable (agent 2's "after 0/N in two consecutive runs, probe should say
+  disabled"): implemented by reading the two most recent archived ledgers'
+  panel tallies — no new state file, no write to git-tracked panel.json —
+  with `"precision_override": true` on the lane as the explicit re-enable.
+  Codex/gemini token capture is PASSIVE (whatever the CLI prints; no new
+  flags, nothing estimated) — adding `--json` to the codex invocation could
+  not be tested against the real CLI here.
 
-## Part E — build order and validation
+## Part E — build order and validation (as executed 2026-09-20)
+
+Shipped in one commit. Validation: `panel_selftest.py` 104 → 137 checks,
+new `tests/hooks_selftest.py` (dispatch counter over two overlapping
+dispatches, heredoc/quoted-string read-guard passes, commit guard on
+`done` vs a round, session guard stand-down); scratch-repo smoke tests of
+`mutate.py` (green baseline with a per-mutant gate, red-baseline refusal,
+dirty refusal and `--allow-dirty`, dirty-but-unrelated file allowed) and
+of `scope`/`diff`/`run`/`wait`/`panel-tally`/`open wontfix` (quoted and
+split range forms, stat trailer, failed-range cleanup, empty-diff refusal,
+unknown `--lanes`, detach + wait, cache and `--force`, launch-failure
+classification with exit 0, probe consent gate, tally merge and
+`--replace`). Not exercised against real codex/gemini/ollama CLIs.
+
+### Original plan
 
 1. **review-loop-tools 0.14.0**: A1–A13 in that order; `panel_selftest.py`
    gains checks for env scrub, consent-in-probe, `--lanes`, cached

@@ -1,5 +1,24 @@
 # Backlog
 
+## From the 2026-09-13/19/20 panel field reports (shipped as review 0.14.0 / qa 0.15.0)
+
+- **Synced-volume scratch isolation** (deferred as C7 in
+  `docs/proposal-2026-09-20-panel-field-reports.md`). `archive` now re-checks
+  for ` 2`-suffixed duplicates after a 3 s settle, but a file provider can
+  re-stamp later still. If duplicates recur on iCloud/Dropbox repos after
+  0.14.0, the next step is a `.nosync`-suffixed scratch area for
+  `evidence/`, `fragments/` and `briefs/` (macOS skips `*.nosync` dirs) —
+  design-sized: every path the skills and hooks name changes.
+- **Codex/gemini token capture is passive.** `run_lane` records whatever
+  usage the CLI prints; codex on a ChatGPT login prints nothing. If a
+  documented `--json` event stream carries `usage`, add the flag and parse
+  it — untested here because no real CLI run was possible in the build
+  session.
+- **Ollama `qwen3-coder:30b` is 0/40 in the field.** Host config, not ours;
+  the precision cap and cross-loop disable now act on it automatically.
+  Worth a CONTROLS note recommending a lower `max_diff_tokens` and a
+  severity cap before anyone re-enables a local lane.
+
 ## From the 2026-09-09 field reports (shipped as review 0.13.0 / qa 0.13.0+0.14.0)
 
 - **Symbol/hunk-level diff→workflow mapping** (agent 2 qa #7, deferred as

@@ -29,9 +29,13 @@ You orchestrate an iterative review loop between the `implementer` and
   the final report. Right after EVERY dispatch, append `:dispatched` to the
   marker (e.g. `round-2-review:dispatched`): the Stop hook then allows a
   legitimate wait, and the SubagentStop hook strips the suffix when the
-  agent returns — so an ended turn while the phase says "round…" without
-  the suffix is a stall, not a wait. For waits that are not a subagent,
-  use `…:waiting:<reason>` (see Waiting, failures, and pauses).
+  LAST live agent returns — the hooks count live dispatches in
+  `briefs/.dispatched`, so two agents running at once (a panel-verifier
+  alongside the closeout implementer is fine) no longer unmark each other
+  (measured: the first return used to strip the mark and the Stop hook then
+  blocked ordinary turns). An ended turn while the phase says "round…"
+  without the suffix is a stall, not a wait. For waits that are not a
+  subagent, use `…:waiting:<reason>` (see Waiting, failures, and pauses).
 - All loop state lives in the TARGET REPO at `.review-loop/`. Never write it into
   the plugin directory.
 - Conclusions in git, evidence and scratch on disk — the loop-dir `.gitignore`
@@ -39,6 +43,11 @@ You orchestrate an iterative review loop between the `implementer` and
   PATH only: never `git add -A`/`--all`, `git add .`, `git add -f`, or a
   directory add of `.review-loop` (a hook blocks these while a loop is live —
   directory adds are how a committed `fragments 2/` happened in a host repo).
+- Implementers never edit BACKLOG.md — in rounds or in closeout. Design-
+  sized punts go to `briefs/round-<N>-punts.md` / `briefs/closeout-punts.md`
+  and YOU copy the sketches into the repo-root BACKLOG.md at record time
+  (one rule; two rules once produced a round-1 BACKLOG edit that closeout
+  had to correct).
 - NEVER override an agent's pinned model in a dispatch (the Agent tool's
   model parameter): pins carry the diversity guarantees and keep run-to-run
   cost numbers comparable.
@@ -115,13 +124,21 @@ You orchestrate an iterative review loop between the `implementer` and
    candidate findings on the diff; the `panel-verifier` agent adjudicates
    them blind; only verified findings reach the chair. To offer it:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py probe --smoke`
-   and present the available lanes. Before enabling codex/gemini lanes,
+   and present the available lanes. The probe's `gate_issues` list is the
+   gate: it checks consent for every configured lane (a re-keyed consent
+   once silently halved a panel while the smoke said ok), smokes the local
+   lane too, and names lanes `disabled-by-precision` (0 kept of >=5 filed in
+   each of the two most recent archived loops — set `"precision_override":
+   true` on the lane to run it anyway). Do not start a panel with a
+   non-empty `gate_issues`. Before enabling codex/gemini lanes,
    state PLAINLY: they send the diff to OpenAI/Google, and the probe's auth
    line says whether the configured tier may train on inputs (Gemini
    free-tier OAuth does — recommend API keys for both). Record the answer
-   in TWO files: `panel.json` with `lanes` (name, type, model, timeout_s,
-   max_diff_tokens; types codex/gemini/ollama/cmd — a `cmd` lane runs an
-   arbitrary command that reads the prompt on stdin) and
+   in TWO files: `panel.json` with `lanes` (name, type, model — a string
+   or a LIST tried in order on quota/model-unavailable errors, the run
+   records `model_used` — timeout_s, max_diff_tokens; types
+   codex/gemini/ollama/cmd — a `cmd` lane runs an arbitrary command that
+   reads the prompt on stdin) and
    `rounds: "seed+final"`; and the consent in the MACHINE-LOCAL file
    printed by
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py consent-path .review-loop`
@@ -148,10 +165,14 @@ You orchestrate an iterative review loop between the `implementer` and
    a converging run look like thrashing. Three seed modes, in priority order:
    - SCOPE: the user named a change under review (a sha range, a diff file,
      or a PR). The range may carry pathspec excludes — e.g.
-     `main..HEAD -- :!prompts.md` (UNQUOTED — stored quotes reach git
-     literally and match nothing) — keep pasted logs and prompt journals
+     `main..HEAD -- :!prompts.md` — `scope` and `diff` share one parser,
+     so the range may be given as separate words or as ONE quoted string;
+     both forms work in both verbs — keep pasted logs and prompt journals
      out of reviewed scope (measured: 816 of 1,439 seed lines were a pasted
-     crash report). Record it first,
+     crash report). Excluded-but-changed paths are listed in a trailer of
+     the `.stat` file and in `briefs/round-N.files`, so a reader can tell
+     "hidden" from "unchanged" (5 of 32 panel candidates once claimed a
+     hidden file "was not updated"). Record it first,
      `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py scope .review-loop/ledger.json <a..b>`
      (render_report lists the scope diff as the FIRST watch-list candidate —
      it is where the findings actually live), then dispatch
@@ -171,19 +192,30 @@ You orchestrate an iterative review loop between the `implementer` and
    PANEL SEED PASS (only in SCOPE mode with panel lanes configured — cold
    reviews have no diff for diff-only lanes; they get the final pass only):
    BEFORE dispatching the seed reviewer, materialize the scope diff
-   (`merge_ledger.py diff .review-loop 0 <range>`) and run the lanes in the
-   background with phase `seed-review:waiting:panel`:
-   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py run .review-loop 0`
-   When it returns (lanes that time out or error are skipped — never wait
-   past their summary), dispatch `panel-verifier` with the candidate file
-   paths, the stat/diff paths, and output
+   (`merge_ledger.py diff .review-loop 0 <range>` — check its exit status;
+   `run` refuses an empty diff, which a failed range once produced) and
+   run the lanes DETACHED with phase `seed-review:waiting:panel`:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py run .review-loop 0 --detach`
+   then `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py wait .review-loop 0`
+   (blocks under the Bash tool's 10-minute ceiling and prints the summary;
+   exit 3 = still running, call it again — lane timeouts above 600 s
+   need no nohup of your own). Read the summary's `failed`/`skipped`
+   counts and the stderr banners: lanes that time out or error are
+   skipped, never waited on past their summary; to recover ONE lane run
+   `run .review-loop 0 --lanes <name> --force` (without `--lanes` a rerun
+   reports existing candidates as `cached` and overwrites nothing). Then
+   dispatch `panel-verifier` with the candidate file paths, the stat/diff
+   paths (the stat's EXCLUDED trailer matters to it), and output
    `.review-loop/fragments/panel/round-0-panel.verified.json`; then record
-   `merge_ledger.py panel-tally .review-loop/ledger.json 0 <verified.json>`.
+   `merge_ledger.py panel-tally .review-loop/ledger.json 0 <verified.json>`
+   (tallies MERGE per lane, so a two-batch round keeps both batches;
+   `--replace` for a deliberate redo).
    The seed reviewer's dispatch then ALSO names the verified file: "panel
    findings, already code-verified — fold into your LEDGER with their
-   source/sources fields kept, dedupe against your own findings, do not
-   re-litigate." The chair mints their IDs like any finding. Never hand the
-   chair raw candidate files.
+   source/sources fields kept; one that restates your own finding keeps
+   YOUR id with the lane appended to its sources; read `notes_for_chair`
+   as leads; do not re-litigate." The chair mints their IDs like any
+   finding. Never hand the chair raw candidate files.
 
 ## Each round (N = 1 .. max_rounds) — three plumbing turns, not seven
 Each orchestrator turn re-reads the whole session context (~25K effective
@@ -197,7 +229,10 @@ one closeout pass), and sets the phase marker.
 1. Dispatch `implementer` with the brief + the reviewer's latest summary
    (the Agent-tool hook stamps `:dispatched` for you). Wait for its CHANGES
    block and confirm it committed; note the task result's token count — you
-   pass it to next-round in step 3 (no separate set-usage call).
+   pass it to next-round in step 3 (no separate set-usage call). Record a
+   dispatch's tokens from its FIRST completion notification only: a
+   repeated notification for the same dispatch (a stale background waiter)
+   is not a second cost (measured: two notifications, figures 0.5% apart).
 2. Materialize the diff ONCE, write the phase, dispatch the reviewer:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py diff .review-loop <N> <round_start_sha>..HEAD`
    (writes `briefs/round-<N>.diff` and `.stat` — nothing enters your
@@ -240,9 +275,18 @@ implementer. Range: `<scope start>..HEAD` when a scope is set, else
 `<round-1 start sha>..HEAD`.
 1. `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py diff .review-loop final <range>`
    then, with phase `…:waiting:panel-final`:
-   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py run .review-loop final`
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/panel_review.py run .review-loop final --detach`
+   and `… wait .review-loop final` (the closeout implementer may run
+   alongside — the dispatch counter keeps the marker honest). A lane that
+   kept 0 of >=5 at seed is capped at 3 candidates here (`cap` in its
+   result) — a measured 0/40 lane cost ~140K verifier tokens per run.
 2. Dispatch `panel-verifier` on the candidates (output
-   `.review-loop/fragments/panel/round-final-panel.verified.json`), then
+   `.review-loop/fragments/panel/round-final-panel.verified.json`) AND hand
+   it the ledger's current state so re-filed findings become
+   `duplicate_of` instead of re-confirmed:
+   `merge_ledger.py open .review-loop/ledger.json all > .review-loop/briefs/final-open.json`
+   and `merge_ledger.py open .review-loop/ledger.json wontfix > .review-loop/briefs/final-wontfix.json`
+   — name both files in the dispatch. Then
    `merge_ledger.py panel-tally .review-loop/ledger.json final <verified.json>`.
 3. Verified findings ride into the CLOSEOUT reviewer's dispatch ("fold in,
    source fields kept") — the chair still owns the ledger. If closeout has
@@ -367,7 +411,14 @@ on a wrong fix. Re-run
 `bash ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_check.sh .review-loop` — any
 violation still standing goes into the WATCH LIST as its own line (tracked
 scratch, duplicate names, oversized files must not sit unnoticed in the host
-repo's index). Print a one-line verdict and the path to the report.
+repo's index). Run it AGAIN immediately before the final commit of the
+loop's conclusions: on iCloud/Dropbox volumes ` 2`-suffixed duplicates can
+appear seconds after a move (archive now re-checks after a settle, but a
+report-time check once said clean while `ledger 2.json` sat in the
+archive). The WATCH LIST's diff candidates end each round at the sha
+`next-round` recorded and list the closeout commit as its own candidate —
+the commit with no round after it. Print a one-line verdict and the path
+to the report.
 
 ## Contracts (canonical fields and verbs)
 A finding's live status is `current_status`; a field named `status` exists
@@ -391,25 +442,36 @@ merge_ledger.py's verbs:
   CLOSEOUT shares the last round's number: record its usage with `add-usage` (accumulate) —
   `set-usage`/`next-round --usage` REPLACE and would silently erase that round's figures.
 - next-round:`merge_ledger.py next-round <loop-dir> <N> [--fragment F]` (merge + metrics + advance, one turn)
-- panel-tally:`merge_ledger.py panel-tally <ledger> <N|final> <verified.json>` (per-lane
-  filed/confirmed/demoted/rejected counts into ledger["panel"] — the report's Panel
-  section renders from it; the verified file itself is scratch)
+- panel-tally:`merge_ledger.py panel-tally <ledger> <N|final> <verified.json> [--replace]` (per-lane
+  filed/confirmed/demoted/duplicate/rejected counts MERGED into ledger["panel"] — the report's Panel
+  section renders from it; "kept" = confirmed + demoted; the verified file itself is scratch)
+- open … wontfix: `merge_ledger.py open <ledger> wontfix` (the accepted-disagreement set, for the
+  final-pass verifier's dedupe)
 The CHANGES block carries `verify_cmd` (scoped tests the reviewer reruns).
 Hooks active during a loop: `read_guard` denies whole-file dumps,
 unfiltered test runs, and whole-diff re-pulls (with the fix in the message);
 `commit_guard` blocks `git add -A`/`--all`/`.`/`-f` and loop-dir directory
-adds while a loop is live (stage by explicit path), and enforces the
-optional env knobs on commits;
-`dispatch_stamp` marks `:dispatched` when you call the Agent tool;
-`session_guard` reports the session transcript size when a loop is invoked.
+adds while a loop is LIVE — `.phase` at round*/seed*/awaiting-human; a
+finished loop's `done` arms nothing — (stage by explicit path), and enforces
+the optional env knobs on commits;
+`dispatch_stamp` marks `:dispatched` when you call the Agent tool and counts
+live dispatches in `briefs/.dispatched` (the SubagentStop hook decrements
+and strips the mark at zero);
+`session_guard` reports the session transcript size when a loop is invoked
+and stands down once `briefs/.session-ok` exists;
+`read_guard` matches command positions only — heredoc bodies and quoted
+strings that merely contain a test command are not test runs.
 Merges record severity changes in `severity_history` (the Promoted column).
 Other scripts: `render_report.py <loop-dir>` (the report), `hotspots.py`
-(cold-review map), `mutate.py <manifest>` (re-run an implementer's mutation
-claims in an isolated worktree), `hygiene_check.sh <loop-dir>` (advisory
+(cold-review map), `mutate.py <manifest> [--allow-dirty]` (re-run an
+implementer's mutation claims in an isolated worktree: runs each test_cmd
+unmutated first and refuses a red baseline, refuses uncommitted changes to
+the manifest's files, honors a per-mutant `test_cmd`), `hygiene_check.sh <loop-dir>` (advisory
 git-hygiene report: tracked scratch, Finder-duplicate names, oversized
 tracked files, denylist-style ignores — run at Setup and before the report),
-`panel_review.py probe|run` (multi-provider panel lanes: probe auth at the
-gate, run lanes against a materialized diff; external models are FINDERS
+`panel_review.py probe|run|wait` (multi-provider panel lanes: probe auth,
+consent and precision at the gate; run lanes against a materialized diff —
+`--lanes a,b`, `--force`, `--detach` + `wait`; external models are FINDERS
 only — the `panel-verifier` agent, pinned `sonnet`, adjudicates their
 candidates blind, and only the chair writes ledger fragments. All three
 pins — chair `opus`, verifier `sonnet`, implementer `inherit` — must stay

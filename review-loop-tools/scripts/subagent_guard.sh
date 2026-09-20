@@ -10,14 +10,36 @@ set -euo pipefail
 cat >/dev/null 2>&1 || true   # drain stdin; the payload isn't needed
 dirs=("$@"); [ ${#dirs[@]} -eq 0 ] && dirs=(.review-loop .qa-loop)
 
-# A subagent just finished: the phase's "dispatched" state is over. Strip the
-# suffix so the Stop hook can again tell "waiting" from "forgot to act".
-# (":waiting:<reason>" is NOT touched — it is the orchestrator's to clear.)
+# A subagent just finished. Decrement the LIVE-dispatch count kept by
+# dispatch_stamp.sh (briefs/.dispatched) and strip the ":dispatched" suffix
+# only when it reaches zero — with a single-bit marker the first of two
+# concurrent agents to return unmarked the other, and the Stop hook then
+# blocked ordinary turns (measured). A missing count file means one live
+# dispatch (pre-0.14 state). ":waiting:<reason>" is NOT touched — it is the
+# orchestrator's to clear.
 for d in "${dirs[@]}"; do
   if [ -f "$d/.phase" ]; then
     case "$(cat "$d/.phase")" in
-      *:dispatched) sed -i '' 's/:dispatched$//' "$d/.phase" 2>/dev/null \
-                    || sed -i 's/:dispatched$//' "$d/.phase" ;;
+      *:dispatched)
+        left="$(python3 - "$d/briefs/.dispatched" <<'PYEOF'
+import fcntl, os, sys
+p = sys.argv[1]
+try:
+    with open(p, "r+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try: n = int((fh.read() or "1").strip() or 1)
+        except ValueError: n = 1
+        n = max(0, n - 1)
+        fh.seek(0); fh.truncate(); fh.write(f"{n}\n")
+except FileNotFoundError:
+    n = 0
+print(n)
+PYEOF
+)"
+        if [ "${left:-0}" -le 0 ]; then
+          sed -i '' 's/:dispatched$//' "$d/.phase" 2>/dev/null \
+            || sed -i 's/:dispatched$//' "$d/.phase"
+        fi ;;
     esac
   fi
 done

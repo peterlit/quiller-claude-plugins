@@ -128,7 +128,7 @@ def set_round(args):
 
 def open_findings(args):
     usage = ("usage: merge_ledger.py open <ledger.json> "
-             "[auto|proposal|all|closeout] [--region WF-n ...] [--severity major|minor]")
+             "[auto|proposal|all|closeout|wontfix] [--region WF-n ...] [--severity major|minor]")
     if len(args) < 1:
         print(usage, file=sys.stderr)
         sys.exit(2)
@@ -153,14 +153,21 @@ def open_findings(args):
     if min_sev not in rank:
         print("merge_ledger: --severity must be blocker|major|minor", file=sys.stderr)
         sys.exit(1)
-    if routing not in ("auto", "proposal", "all", "closeout"):
-        print(f"merge_ledger: filter must be auto|proposal|all|closeout, "
+    if routing not in ("auto", "proposal", "all", "closeout", "wontfix"):
+        print(f"merge_ledger: filter must be auto|proposal|all|closeout|wontfix, "
               f"got '{routing}'", file=sys.stderr)
         sys.exit(1)
     with open(path) as fh:
         ledger = json.load(fh)
     sel = []
     for f in ledger.get("findings", []):
+        if routing == "wontfix":
+            # The accepted-disagreement set, for the final-pass verifier: a
+            # panel lane re-filing an accepted wontfix as a major must be
+            # marked duplicate_of, not re-confirmed (measured).
+            if f.get("current_status") == "wontfix":
+                sel.append({k: v for k, v in f.items() if k != "status_history"})
+            continue
         if f.get("current_status") not in ("open", "partial"):
             continue
         r = f.get("routing", "auto")
@@ -191,6 +198,18 @@ def open_findings(args):
         sel.append({k: v for k, v in f.items() if k != "status_history"})
     print(json.dumps({"findings": sel}, indent=2))
 
+def split_range(args):
+    """ONE parser for `scope` and `diff`: the range plus optional pathspecs,
+    given either as separate shell words or as a single quoted string
+    ('a..b -- :!prompts.md'). Returns (range, [pathspec tokens]). The two
+    verbs once parsed differently — scope normalized through shlex while
+    diff took argv[2] verbatim — so the same string one accepted made the
+    other fail with 'bad revision' (measured, twice)."""
+    toks = shlex.split(" ".join(str(a) for a in args))
+    if not toks:
+        return "", []
+    return toks[0], toks[1:]
+
 def set_scope(args):
     """Record the change under review (a sha range) so render_report can
     list the scope diff as the FIRST watch-list candidate."""
@@ -199,7 +218,8 @@ def set_scope(args):
         sys.exit(2)
     with open(args[0]) as fh:
         ledger = json.load(fh)
-    ledger["scope"] = " ".join(shlex.split(" ".join(args[1:])))
+    rng, extra = split_range(args[1:])
+    ledger["scope"] = " ".join([rng] + extra)
     with open(args[0], "w") as fh:
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
@@ -348,28 +368,58 @@ def write_diff(args):
     if len(args) < 3:
         print("usage: merge_ledger.py diff <loop-dir> <round> <range>", file=sys.stderr)
         sys.exit(2)
-    loop, rnd, rng = args[0], args[1], args[2]
-    extra = list(args[3:])   # pathspecs, e.g. -- :!prompts.md to keep logs out
+    loop, rnd = args[0], args[1]
+    rng, extra = split_range(args[2:])   # pathspecs, e.g. -- :!prompts.md to keep logs out
     base = os.path.basename(os.path.abspath(loop))
     # Nothing in the loop directory is ever under review; without this a
     # closeout diff picks up ledger/archive churn (measured: 444 -> 862 lines).
+    loop_only = ["--", ".", f":(exclude){base}"]
     if "--" in extra:
         extra.append(f":(exclude){base}")
     else:
-        extra += ["--", ".", f":(exclude){base}"]
+        extra += loop_only
     repo = os.path.dirname(os.path.abspath(loop))
     os.makedirs(os.path.join(loop, "briefs"), exist_ok=True)
     dpath = os.path.join(loop, "briefs", f"round-{rnd}.diff")
     spath = os.path.join(loop, "briefs", f"round-{rnd}.stat")
-    with open(dpath, "w") as fh:
-        d = subprocess.run(["git", "-C", repo, "diff", rng] + extra, stdout=fh, stderr=subprocess.PIPE, text=True)
-    with open(spath, "w") as fh:
-        s = subprocess.run(["git", "-C", repo, "diff", "--stat", rng] + extra, stdout=fh, stderr=subprocess.PIPE, text=True)
-    if d.returncode or s.returncode:
-        print(f"merge_ledger: git diff failed: {(d.stderr or s.stderr).strip()}", file=sys.stderr)
+    fpath = os.path.join(loop, "briefs", f"round-{rnd}.files")
+    def git(*a):
+        return subprocess.run(["git", "-C", repo] + list(a), capture_output=True, text=True)
+    d = git("diff", rng, *extra)
+    s = git("diff", "--stat", rng, *extra)
+    # The UNFILTERED changed-file list: pathspec excludes hide files from
+    # the view, and a reader who cannot tell "unchanged" from "hidden" files
+    # findings about it (measured: 5 of 32 panel candidates were "the
+    # solutions were not updated" against a scope that excluded them).
+    full = git("diff", "--name-only", rng, *loop_only)
+    seen = git("diff", "--name-only", rng, *extra)
+    if d.returncode or s.returncode or full.returncode or seen.returncode:
+        # Never leave a partial file behind: a 0-line diff once fed a panel
+        # run that reported a clean pass. Remove, report, exit non-zero.
+        for pth in (dpath, spath, fpath):
+            if os.path.exists(pth):
+                os.remove(pth)
+        err = (d.stderr or s.stderr or full.stderr or seen.stderr).strip()
+        print(f"merge_ledger: git diff failed: {err}", file=sys.stderr)
         sys.exit(1)
+    visible = [l for l in seen.stdout.splitlines() if l.strip()]
+    changed = [l for l in full.stdout.splitlines() if l.strip()]
+    hidden = [c for c in changed if c not in set(visible)]
+    with open(dpath, "w") as fh:
+        fh.write(d.stdout)
+    with open(spath, "w") as fh:
+        fh.write(s.stdout)
+        if hidden:
+            fh.write("\nEXCLUDED (changed in range; not shown in this view):\n")
+            for h in hidden:
+                fh.write(f" {h} (changed in range; excluded from this view)\n")
+    with open(fpath, "w") as fh:
+        for c in changed:
+            fh.write(c + ("\t(changed in range; excluded from this view)" if c in hidden else "") + "\n")
     lines = sum(1 for _ in open(dpath))
-    print(json.dumps({"diff": dpath, "stat": spath, "range": rng, "diff_lines": lines}))
+    print(json.dumps({"diff": dpath, "stat": spath, "files": fpath, "range": rng,
+                      "diff_lines": lines, "changed_files": len(changed),
+                      "excluded_changed": len(hidden)}))
 
 def next_round(args):
     """One call for the end-of-round plumbing: merge the fragment, run metrics,
@@ -398,6 +448,21 @@ def next_round(args):
     here = os.path.dirname(os.path.abspath(__file__))
     is_qa = os.path.basename(os.path.abspath(loop)) == ".qa-loop" or os.path.exists(os.path.join(here, "qa_metrics.py")) and not os.path.exists(os.path.join(here, "metrics.py"))
     out = {"round": rnd}
+    # Record where this round's change ENDS (HEAD now: the reviewer never
+    # commits, so HEAD is the implementer's commit). render_report ends the
+    # round's watch-list diff here instead of at the next round's start or
+    # HEAD — which lumped the closeout commit into the last round (measured,
+    # twice). The closeout diff then gets its own candidate.
+    if os.path.exists(ledger_path):
+        r = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(loop)),
+                            "rev-parse", "HEAD"], capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            with open(ledger_path) as fh:
+                led = json.load(fh)
+            led.setdefault("round_end_shas", {})[str(rnd)] = r.stdout.strip()
+            with open(ledger_path, "w") as fh:
+                json.dump(led, fh, indent=2)
+                fh.write("\n")
     for u in usages:   # role=tokens, applied to THIS round before metrics
         role, _, tok = u.partition("=")
         set_usage.quiet = True
@@ -574,8 +639,20 @@ def archive(args):
     # Only duplicates that APPEARED during this archive fail the call —
     # pre-existing ones in old archives were already reported once.
     dup_lines = sorted(dup_report() - pre_dups)
+    # A file provider (iCloud/Dropbox) re-stamps ASYNCHRONOUSLY: duplicates
+    # once appeared seconds after this check had printed 0 and hygiene had
+    # said clean (measured). Wait for it to settle and look again — best
+    # effort, disclosed as a separate count.
+    settle = float(os.environ.get("REVIEW_LOOP_ARCHIVE_SETTLE_S", "3") or 0)
+    late = []
+    if settle > 0:
+        import time as _time
+        _time.sleep(settle)
+        late = sorted(dup_report() - pre_dups - set(dup_lines))
     print(json.dumps({"archived_to": dest, "moved": moved,
-                      "duplicates_detected": len(dup_lines)}))
+                      "duplicates_detected": len(dup_lines),
+                      "duplicates_detected_late": len(late)}))
+    dup_lines = dup_lines + late
     if dup_lines:
         for l in dup_lines:
             print(l, file=sys.stderr)

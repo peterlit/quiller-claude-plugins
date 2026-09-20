@@ -148,13 +148,25 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   collides with stale screenshots — into `archive/<name>/` so the next
   loop starts clean (moves are per-file with a post-check, and a
   sync-conflict ` 2`-name appearing during the move fails loudly right
-  there instead of at report time — iCloud/Dropbox repos do this); `scope <ledger> <a..b>`
+  there instead of at report time — iCloud/Dropbox repos do this; a second
+  check runs after a 3 s settle, `REVIEW_LOOP_ARCHIVE_SETTLE_S` to tune,
+  because the file provider re-stamps asynchronously and once minted
+  `ledger 2.json` after both checks had passed — run `hygiene_check.sh`
+  again right before the final commit, and keep the repo outside the
+  synced tree if it recurs); `scope <ledger> <a..b>`
   records the change under review so the report's WATCH LIST leads with it;
   `diff <loop-dir> <N> <a..b> [pathspecs]` materializes the round diff once
   for subagents (the loop directory is always excluded — its state is never
-  under review); `set-usage` records token cost; `next-round <loop-dir> <N>
-  [--fragment F] [--usage role=tokens …]` folds merge + metrics + usage +
-  advance into one orchestrator turn. Archives are named by the ARCHIVED
+  under review; `scope` and `diff` share one range parser, so a quoted
+  single string and separate words both work; excluded-but-changed paths
+  are listed in an `EXCLUDED` trailer of the `.stat` and in
+  `briefs/round-N.files`; a failed git leaves no partial files); `set-usage`
+  records token cost; `next-round <loop-dir> <N> [--fragment F] [--usage
+  role=tokens …]` folds merge + metrics + usage + advance into one
+  orchestrator turn and records the round's END sha, so the report's
+  watch list ends each round at its own commit and lists the closeout
+  commit separately; `open <ledger> wontfix` `[review]` extracts the
+  accepted-disagreement set for the final-pass verifier. Archives are named by the ARCHIVED
   loop's scope sha, so old loops are findable without opening each one. An
   open blocker merged in review scope mode auto-escalates max_rounds 2→5.
   *In practice:* a finding's live status is `current_status` — a top-level
@@ -170,9 +182,14 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   (an agent is running; stripped automatically when it returns), and
   `…:waiting:<reason>` (the orchestrator is waiting on something that isn't
   a subagent — a 529 backoff, a background task, you; the hooks leave it
-  alone). Each plugin's hooks guard only their own loop directory.
+  alone). The hooks COUNT live dispatches in `briefs/.dispatched`: two
+  agents running at once (a panel-verifier beside the closeout
+  implementer) no longer unmark each other — `:dispatched` is stripped
+  when the last one returns. Each plugin's hooks guard only their own loop
+  directory.
   *In practice:* escape hatch — if a dead session leaves the guard armed,
-  write `done` into it and the guard stands down.
+  write `done` into it and the guard stands down (and delete
+  `briefs/.dispatched` if a crashed dispatch left the count high).
 - **`thrashing_soft` remembers being answered** `[both]` — after a human
   approves a continuation the orchestrator records it (`consulted` verb);
   the next thrashing signal is hard automatically, and at max_rounds the
@@ -223,7 +240,10 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   a >200-line file, `head`/`sed` windows over 200 lines, unfiltered
   `xcodebuild test`/`swift test`, and re-pulling a whole diff that is already
   materialized in `briefs/round-N.diff`. Agents re-issue a windowed or
-  filtered command; nothing is lost. Inactive outside loop phases.
+  filtered command; nothing is lost. Inactive outside loop phases. It
+  matches command POSITIONS: a heredoc or quoted string that merely
+  contains a test command (writing a `verify_cmd` into a brief) is not a
+  test run.
 - **Simulator discipline** `[both]` — every agent may touch only the device
   udid named in its dispatch, and never finds an app process by name
   (`pgrep -f`, `lldb -n`): other sessions' simulators share your Mac, and an
@@ -238,7 +258,12 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   recency so cold reviews read where defects live; `mutate.py <manifest>`
   re-runs an implementer's mutation claims in an isolated worktree — "8/8
   killed" is now checkable (the implementer names its manifest in CHANGES as
-  `mutations`). `[qa]` `plan_round.py` selects the targeted set and emits
+  `mutations`; the runner runs each `test_cmd` unmutated first and refuses
+  a red baseline — a filter that matched nothing once reported every
+  mutant killed — refuses uncommitted changes to the manifest's files
+  unless `--allow-dirty` — a pre-commit run once reported every mutant
+  survived against the old code — and honors a per-mutant `test_cmd` so
+  UI-only mutants alone pay the UI suite). `[qa]` `plan_round.py` selects the targeted set and emits
   chunk manifests (≤5 cases, ≥3 after tiny-chunk coalescing — each dispatch
   pays ~40-60K fixed cost) from `paths(WF-n)` lines in WORKFLOWS.md and
   `TC-x.y [persona] [smoke] [perf]` lines in TESTCASES.md — workflow ids
@@ -274,8 +299,18 @@ when the CLIs exist.*
   metrics and convergence math are untouched. Runs on the seed diff (SCOPE
   mode) and once after any stop on the accumulated change (`seed+final`).
   *In practice:* ask for "a panel" when starting a loop; the setup gate
-  probes which lanes are installed and authenticated
-  (`panel_review.py probe --smoke`) and asks for consent.
+  probes which lanes are installed, authenticated AND consented
+  (`panel_review.py probe --smoke` — its `gate_issues` list is the gate;
+  the local lane is smoked too) and asks for consent. Long lanes: `run
+  … --detach` then `wait <loop> <round>` (bounded under the Bash tool's
+  10-minute ceiling; exit 3 = still running, call again). One lane again:
+  `run … --lanes <name> --force` — without `--force` existing candidates
+  are reported `cached` and never overwritten. A lane's `model` may be a
+  list; on quota or model-unavailable errors the next entry is tried and
+  `model_used` is recorded (free-tier gemini keys exhaust a daily quota
+  after roughly one 32K-token prompt). Lane CLIs run with
+  `NODE_OPTIONS`/`PYTHONPATH`/`DYLD_*`-style injection vars scrubbed — a
+  terminal wrapper's stale preload once killed both Node lanes at startup.
 - **Consent and privacy** `[review]` — codex/gemini lanes send the diff off
   the machine; the MACHINE-LOCAL consent file (outside the repo, keyed by
   the loop dir's path — `consent-path` prints it)
@@ -308,13 +343,27 @@ when the CLIs exist.*
   the flag is not adopted, and for both lanes the empty jail, not a vendor
   sandbox, is the isolation.
 - **Flood control and measurement** `[review]` — each lane files at most 10
-  candidates by confidence; the report's Panel section shows per-lane
-  filed/confirmed/demoted/rejected, and that kept-rate is the drop-or-keep
-  signal for each lane. Lane failures (timeout, auth expiry, outage) are
-  soft: skipped with disclosure, never blocking a round.
+  candidates by confidence; candidates whose every citation lies outside
+  the round's changed-file list are dropped before the verifier reads them
+  (`dropped_no_evidence`); the report's Panel section shows per-lane
+  filed/confirmed/demoted/duplicate/rejected, and "kept" (confirmed +
+  demoted — duplicates of ledgered findings never count) is the
+  drop-or-keep signal. Precision acts on it: a lane that kept 0 of >=5 at
+  seed is capped at 3 candidates on the final pass (`cap` in its result),
+  and a lane that was 0/N in each of the two most recent archived loops is
+  `disabled-by-precision` until the lane sets `"precision_override": true`
+  (measured: one local 30B model filed 40 candidates across four passes
+  with 0 kept, ~140K verifier tokens per run). Lane failures (timeout, auth
+  expiry, outage, quota, launch) are soft: skipped with disclosure — one
+  stderr line per lane with the classified reason first, `failed`/`skipped`
+  counts in the run JSON, exit code 0 — never blocking a round. Each lane
+  result carries `elapsed_s` and whatever token counts the CLI or server
+  exposes (`tokens`; nothing is estimated).
   *In practice:* confirmed findings appear in the report tagged
   `via panel:<lane>`; a finding tagged with several lanes is cross-family
-  agreement — read it first.
+  agreement — read it first. The verifier's `notes_for_chair` travel to the
+  chair by file; the final-pass verifier gets the open ledger and the
+  wontfix list so re-filed findings become `duplicate_of`.
 
 ## Driver backends (qa)
 
@@ -363,6 +412,12 @@ when the CLIs exist.*
 ## Commit guard
 
 *Surface: environment variables, set in the session — not committed.*
+
+- **Scope** `[both]` — the staging rules (`git add -A`/`--all`/`.`/`-f`
+  and loop-dir directory adds denied) arm only while a loop is LIVE:
+  `.phase` at round*/seed*/awaiting-human. A finished loop's `done` arms
+  nothing (the guard once blocked a pre-loop commit for weeks with a
+  message claiming a loop was running). Stage by explicit path anyway.
 
 - **`REVIEW_LOOP_MAX_DIFF`** `[both]` (default unlimited) — blocks any
   implementer commit whose staged diff exceeds N lines.

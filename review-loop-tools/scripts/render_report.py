@@ -134,8 +134,8 @@ def main():
         L.append("_Per-lane precision — the drop-or-keep signal. Rejected "
                  "candidates are counts only; confirmed ones appear among the "
                  "findings tagged `via panel:<lane>`._\n")
-        L.append("| Round | Lane | Filed | Confirmed | Demoted | Rejected | Kept rate |")
-        L.append("|---|---|---:|---:|---:|---:|---:|")
+        L.append("| Round | Lane | Filed | Confirmed | Demoted | Duplicate | Rejected | Kept rate |")
+        L.append("|---|---|---:|---:|---:|---:|---:|---:|")
         # Numeric rounds in order; labels ("final") after them.
         for rk in sorted(panel, key=lambda k: (0, int(k)) if k.isdigit() else (1, 0)):
             if not isinstance(panel[rk], dict):
@@ -145,10 +145,14 @@ def main():
                 if not isinstance(t, dict):
                     continue
                 filed = t.get("filed", 0)
+                # "kept" = reached the chair as a NEW finding: confirmed +
+                # demoted. Duplicates of ledgered findings are their own
+                # column and never kept (same definition as panel-tally).
                 kept = t.get("confirmed", 0) + t.get("demoted", 0)
                 rate = f"{kept}/{filed}" if filed else "—"
                 L.append(f"| {rk} | {lane} | {filed} | {t.get('confirmed', 0)} | "
-                         f"{t.get('demoted', 0)} | {t.get('rejected', 0)} | {rate} |")
+                         f"{t.get('demoted', 0)} | {t.get('duplicate', 0)} | "
+                         f"{t.get('rejected', 0)} | {rate} |")
         L.append("")
 
     L.append("## Open findings by severity\n")
@@ -246,12 +250,26 @@ def main():
     closeout_frags = sorted(glob.glob(os.path.join(loop, "fragments", "round-*-closeout.json")))
     L.append("## Closeout\n")
     if closeout_frags:
-        ids = set()
+        ids, suites = set(), {}
         for cf in closeout_frags:
             try:
-                ids |= {x.get("id") for x in (load(cf) or {}).get("findings", [])}
+                frag = load(cf) or {}
+                ids |= {x.get("id") for x in frag.get("findings", [])}
+                if isinstance(frag.get("suites"), dict):
+                    suites.update(frag["suites"])
             except Exception:
                 pass
+        if suites:
+            # Structured suite counts: "green" once hid 8 of 13 UI tests
+            # skipped by XCTSkipIf (measured) — a Skipped column makes it
+            # visible without reading the reviewer's note.
+            L.append("| Suite | Executed | Failed | Skipped |")
+            L.append("|---|---:|---:|---:|")
+            for name in sorted(suites):
+                t = suites[name] if isinstance(suites[name], dict) else {}
+                L.append(f"| {name} | {t.get('executed', '—')} | {t.get('failed', '—')} | "
+                         f"{t.get('skipped', '—')} |")
+            L.append("")
         # One line per finding — the full entries already appear above.
         for f in findings:
             if f.get("id") in ids:
@@ -337,9 +355,16 @@ def main():
                      f"(check the range and pathspec quoting) — look here anyway: "
                      f"this range is where the findings live")
             diff_cands += 1
+    end_shas = ledger.get("round_end_shas") or {}
+    last_end = None
     for rnd in sorted(shas, key=int):
         start = shas[rnd]
-        end = shas.get(str(int(rnd) + 1), "HEAD")
+        # The round ends where next-round recorded HEAD (the implementer's
+        # commit); falling back to the next round's start, then HEAD. The
+        # HEAD fallback once lumped the closeout commit into the last round
+        # (measured, twice) — the closeout gets its own candidate below.
+        end = end_shas.get(str(rnd)) or shas.get(str(int(rnd) + 1), "HEAD")
+        last_end = end if end != "HEAD" else last_end
         # Through numstat(): the per-round path predated the excluding helper
         # and leaked loop state into the WATCH LIST (measured: ledger.json
         # listed as a round's largest change).
@@ -351,6 +376,15 @@ def main():
         L.append(f"- **round {rnd} diff** `{start[:7]}..{end[:7] if end != 'HEAD' else 'HEAD'}` — "
                  f"{len(files)} files, {total} lines; largest: {top} — look here because: <!-- orchestrator fills -->")
         diff_cands += 1
+    if closeout_ran and last_end:
+        files = numstat(f"{last_end}..HEAD")
+        if files:
+            total = sum(f[0] for f in files)
+            top = ", ".join(f"`{p}` (+{a}/-{d})" for _, a, d, p in files[:3])
+            L.append(f"- **closeout diff** `{last_end[:7]}..HEAD` — {len(files)} files, "
+                     f"{total} lines; largest: {top} — look here because: the commit "
+                     f"with no round after it <!-- orchestrator fills -->")
+            diff_cands += 1
     if not shas:
         L.append("- <!-- no round_shas in ledger (set-round records them); list the 3-5 most invasive diffs with commits by hand -->")
     L.append("")

@@ -129,8 +129,10 @@ def make_loop(root):
 
 def run_panel(root, env_extra=None):
     env = dict(os.environ, **(env_extra or {}))
+    # --force: the fixture reruns the same round; without it every lane
+    # after the first run would report `cached` (the 0.14 rerun guard).
     r = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
-            "run", ".review-loop", "0"], cwd=root, env=env)
+            "run", ".review-loop", "0", "--force"], cwd=root, env=env)
     ok(r.returncode == 0, "panel run exits 0 despite bad lanes")
     return {l["lane"]: l for l in json.loads(r.stdout)["lanes"]}
 
@@ -1012,6 +1014,228 @@ def main():
                "(capped at 10s), not a hardcoded 10s")
         finally:
             pr.open_url = real_open_url
+
+        # ================= 0.14.0 field-report additions =================
+
+        # --- jail_env scrubs interpreter-injection vars (NODE_OPTIONS killed
+        # both Node lanes at startup while the probe had passed) ---
+        os.environ["NODE_OPTIONS"] = "--require=/gone.cjs"
+        os.environ["DYLD_INSERT_LIBRARIES"] = "/x.dylib"
+        os.environ["PANEL_KEEP_ME"] = "1"
+        try:
+            je = pr.jail_env(td)
+            ok("NODE_OPTIONS" not in je and "DYLD_INSERT_LIBRARIES" not in je
+               and je.get("PANEL_KEEP_ME") == "1",
+               "jail_env drops NODE_OPTIONS/DYLD_*, keeps ordinary vars")
+        finally:
+            for k in ("NODE_OPTIONS", "DYLD_INSERT_LIBRARIES", "PANEL_KEEP_ME"):
+                os.environ.pop(k, None)
+
+        # --- error classification puts the line that matters FIRST ---
+        k, note = pr.error_note("Loading model...\nwarning: slow\n"
+                                "Error: Cannot find module '/var/x/restore.cjs'\n")
+        ok(k == "launch" and note.startswith("Error: Cannot find module"),
+           "launch failure classified, cause line first in note")
+        k, _ = pr.error_note("x\nTerminalQuotaError: exhausted your daily quota")
+        ok(k == "quota", "quota failure classified")
+        k, _ = pr.error_note("404 model gemini-2.5-pro is no longer available")
+        ok(k == "model-unavailable", "model-unavailable classified")
+        k, _ = pr.error_note("something odd happened")
+        ok(k == "other", "unknown failure is 'other'")
+
+        # --- evidence-path pre-filter ---
+        changed = ["src/App/MapScreen.swift", "Tests/MapTests.swift"]
+        ok(pr.evidence_in_scope(["src/App/MapScreen.swift:12"], changed)
+           and pr.evidence_in_scope(["b/src/App/MapScreen.swift:12"], changed)
+           and pr.evidence_in_scope(["MapScreen.swift:12"], changed)
+           and not pr.evidence_in_scope(["src/App/Other.swift:3"], changed)
+           and pr.evidence_in_scope(["nowhere:1"], None),
+           "evidence_in_scope: exact/prefixed/partial paths match; unknown "
+           "paths do not; no list = everything in scope")
+        s3 = pr.sanitize({"findings": [
+            {"claim": "in", "evidence": ["src/App/MapScreen.swift:1"], "confidence": 0.5},
+            {"claim": "out", "evidence": ["src/Elsewhere.swift:1"], "confidence": 0.99}]},
+            "l", changed)
+        ok(s3["filed"] == 1 and s3["dropped_no_evidence"] == 1
+           and s3["findings"][0]["claim"] == "in",
+           "sanitize drops candidates citing only unchanged files and counts them")
+        s4 = pr.sanitize({"findings": [
+            {"claim": str(i), "evidence": ["src/App/MapScreen.swift:1"],
+             "confidence": 0.5} for i in range(8)]}, "l", changed, cap=3)
+        ok(s4["filed"] == 3 and s4["overflow_dropped"] == 5,
+           "sanitize honors a per-call cap")
+
+        # --- passive usage capture ---
+        ok(pr.usage_from_text('{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":3}}')
+           == {"input_tokens": 12, "output_tokens": 3}
+           and pr.usage_from_text("done. tokens used: 1,234") == {"total_tokens": 1234}
+           and pr.usage_from_text("no numbers here") is None,
+           "usage_from_text captures JSON usage or a tokens-used line, never estimates")
+
+        # --- run: --lanes filter, cached candidates, --force, summary file,
+        # failed/skipped counts, banner --- (earlier checks left the fixture's
+        # consent malformed; restore a real one so cmd lanes actually run)
+        write_consent(loop, {"cmd_lanes_approved": [
+            hashlib.sha256(good_cmd.encode()).hexdigest(), "exit 3", "true"]})
+        def run_args(*extra, env_extra=None):
+            env = dict(os.environ, **(env_extra or {}))
+            return sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                       "run", ".review-loop", "0"] + list(extra), cwd=td, env=env)
+        r = run_args("--lanes", "good", "--force")
+        d = json.loads(r.stdout)
+        ok(r.returncode == 0 and [l["lane"] for l in d["lanes"]] == ["good"],
+           "run --lanes runs only the named lane")
+        ok(os.path.exists(pr.summary_path(loop, "0"))
+           and json.load(open(pr.summary_path(loop, "0")))["lanes"][0]["lane"] == "good",
+           "run writes the round summary file")
+        ok("elapsed_s" in d["lanes"][0], "lane result carries elapsed_s")
+        r = run_args("--lanes", "good")
+        ok(json.loads(r.stdout)["lanes"][0]["status"] == "cached",
+           "a lane with existing candidates is reported cached without --force")
+        r = run_args("--lanes", "nope")
+        ok(r.returncode == 2 and "not in panel.json" in r.stderr,
+           "run --lanes with an unknown name exits 2")
+        r = run_args("--lanes", "failcmd,off", "--force")
+        d = json.loads(r.stdout)
+        ok(d["failed"] == 1 and d["skipped"] == 1
+           and "lane failcmd ERROR" in r.stderr and "lane off SKIPPED" in r.stderr,
+           "run reports failed/skipped counts and one stderr banner per lane")
+        ok(r.returncode == 0, "lane failures stay SOFT (exit 0)")
+
+        # --- run refuses an EMPTY diff ---
+        dpath = os.path.join(loop, "briefs", "round-0.diff")
+        saved_diff = open(dpath).read()
+        open(dpath, "w").close()
+        r = run_args("--force")
+        ok(r.returncode == 2 and "EMPTY" in r.stderr,
+           "run refuses a 0-line round diff instead of reporting a clean pass")
+        open(dpath, "w").write(saved_diff)
+
+        # --- --detach + wait ---
+        spath = pr.summary_path(loop, "0")
+        r = run_args("--detach", "--lanes", "good", "--force")
+        d = json.loads(r.stdout)
+        ok(r.returncode == 0 and d.get("detached") and "pid" in d,
+           "run --detach returns at once with pid and summary path")
+        w = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "wait", ".review-loop", "0", "--timeout", "30"], cwd=td)
+        ok(w.returncode == 0 and json.loads(w.stdout)["lanes"][0]["lane"] == "good",
+           "wait blocks for the detached run and prints its summary")
+        os.remove(spath)
+        w = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "wait", ".review-loop", "0", "--timeout", "0"], cwd=td)
+        ok(w.returncode == 3, "wait exits 3 when the summary has not landed")
+
+        # --- model fallback list: quota on the first model tries the next ---
+        calls = []
+        def fake_runner(lane, prompt, repo, timeout):
+            calls.append(lane.get("model"))
+            if lane.get("model") == "pro":
+                return "", subprocess.CompletedProcess([], 1, "", "429 quota exceeded")
+            return '{"findings": []}', subprocess.CompletedProcess([], 0, "", "")
+        real_runner = pr.RUNNERS["cmd"]
+        try:
+            pr.RUNNERS["cmd"] = fake_runner
+            write_consent(loop, {"cmd_lanes_approved": ["fb"]})
+            res = pr.run_lane({"name": "fb", "type": "cmd", "cmd": "fb",
+                               "model": ["pro", "flash"], "_force": True},
+                              loop, "0", td, pr.load_consent(loop))
+            ok(calls == ["pro", "flash"] and res["status"] == "ok"
+               and res["model_used"] == "flash",
+               "model list falls through on quota and records model_used")
+            calls.clear()
+            def fake_auth(lane, prompt, repo, timeout):
+                calls.append(lane.get("model"))
+                return "", subprocess.CompletedProcess([], 1, "", "401 unauthorized")
+            pr.RUNNERS["cmd"] = fake_auth
+            res = pr.run_lane({"name": "fb", "type": "cmd", "cmd": "fb",
+                               "model": ["a", "b"], "_force": True},
+                              loop, "0", td, pr.load_consent(loop))
+            ok(calls == ["a"] and res["status"] == "error" and res["error_kind"] == "auth",
+               "auth failure does NOT fall through to the next model")
+        finally:
+            pr.RUNNERS["cmd"] = real_runner
+
+        # --- precision: final-pass cap from the seed tally; cross-loop disable ---
+        led_path = os.path.join(loop, "ledger.json")
+        json.dump({"findings": [], "panel": {"0": {"good": {"filed": 10, "confirmed": 0,
+                                                            "demoted": 0, "rejected": 10}}}},
+                  open(led_path, "w"))
+        for fn in ("round-final.stat", "round-final.diff"):
+            shutil.copy(os.path.join(loop, "briefs", fn.replace("final", "0")),
+                        os.path.join(loop, "briefs", fn))
+        many = (sys.executable + " -c \"import sys,json; sys.stdin.read(); "
+                "print(json.dumps({'findings':[{'claim':str(i),'evidence':['a.md:1'],"
+                "'severity':'minor','confidence':0.5} for i in range(8)]}))\"")
+        write_consent(loop, {"cmd_lanes_approved": [many]})
+        res = pr.run_lane({"name": "good", "type": "cmd", "cmd": many, "_force": True},
+                          loop, "final", td, pr.load_consent(loop))
+        ok(res["status"] == "ok" and res["filed"] == 3 and res["cap"] == 3
+           and "seed kept 0/10" in res["cap_reason"],
+           "final pass caps a 0/10 seed lane at 3 and says why")
+        res = pr.run_lane({"name": "other", "type": "cmd", "cmd": many, "_force": True},
+                          loop, "final", td, pr.load_consent(loop))
+        ok(res["filed"] == 8, "a lane without a 0/N seed tally is not capped")
+        for i, name in enumerate(("20260901-000000-aaaaaaa", "20260902-000000-bbbbbbb")):
+            d = os.path.join(loop, "archive", name)
+            os.makedirs(d)
+            json.dump({"panel": {"0": {"good": {"filed": 10, "confirmed": 0, "demoted": 0}},
+                                 "final": {"good": {"filed": 6, "confirmed": 0, "demoted": 0}}}},
+                      open(os.path.join(d, "ledger.json"), "w"))
+        ok(pr.precision_disabled(loop, "good") and not pr.precision_disabled(loop, "other"),
+           "0/N in the two most recent archived loops disables the lane; others untouched")
+        res = pr.run_lane({"name": "good", "type": "cmd", "cmd": many, "_force": True},
+                          loop, "0", td, pr.load_consent(loop))
+        ok(res["status"] == "disabled-by-precision", "run skips a precision-disabled lane")
+        res = pr.run_lane({"name": "good", "type": "cmd", "cmd": many, "_force": True,
+                           "precision_override": True},
+                          loop, "0", td, pr.load_consent(loop))
+        ok(res["status"] == "ok", "precision_override re-enables the lane")
+        os.remove(led_path)
+        shutil.rmtree(os.path.join(loop, "archive"))
+
+        # --- probe reports consent and gate issues ---
+        write_consent(loop, {})
+        p = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "probe", os.path.join(loop, "panel.json")], cwd=td)
+        pd = json.loads(p.stdout)
+        ok(any("no remote-lane consent" in i for i in pd["gate_issues"])
+           and "GATE" in p.stderr,
+           "probe lists a configured remote lane without consent as a gate issue")
+        ok(pd.get("good", {}).get("consent", "").startswith("MISSING"),
+           "probe marks an unapproved cmd lane's consent MISSING")
+        write_consent(loop, {"remote_lanes_approved": True})
+        p = sh([sys.executable, os.path.join(SCRIPTS, "panel_review.py"),
+                "probe", os.path.join(loop, "panel.json")], cwd=td)
+        pd = json.loads(p.stdout)
+        ok(not any("remote-lane consent" in i for i in pd["gate_issues"]),
+           "probe reports consent ok once granted")
+
+        # --- panel-tally MERGES per lane; --replace replaces; kept/duplicate ---
+        json.dump({"findings": []}, open(led_path, "w"))
+        v1 = os.path.join(td, "v1.json"); v2 = os.path.join(td, "v2.json")
+        json.dump({"lane_tallies": {"codex": {"filed": 3, "confirmed": 1, "demoted": 0,
+                                              "duplicate": 1, "rejected": 1}}}, open(v1, "w"))
+        json.dump({"lane_tallies": {"gemini": {"filed": 6, "confirmed": 0, "demoted": 2,
+                                               "rejected": 4}}}, open(v2, "w"))
+        ML = os.path.join(SCRIPTS, "merge_ledger.py")
+        sh([sys.executable, ML, "panel-tally", led_path, "0", v1])
+        t = json.loads(sh([sys.executable, ML, "panel-tally", led_path, "0", v2]).stdout)
+        ok(set(t["lanes"]) == {"codex", "gemini"} and t["lanes"]["codex"]["kept"] == 1
+           and t["lanes"]["codex"]["duplicate"] == 1 and t["lanes"]["gemini"]["kept"] == 2,
+           "panel-tally merges a second batch per lane; kept excludes duplicates")
+        t = json.loads(sh([sys.executable, ML, "panel-tally", led_path, "0", v1,
+                           "--replace"]).stdout)
+        ok(set(t["lanes"]) == {"codex"}, "panel-tally --replace replaces the round")
+        rep = rr.main.__code__  # render must tolerate and show the duplicate column
+        os.remove(led_path)
+
+        # --- merge_ledger: scope and diff share ONE parser; failed diff leaves
+        # no partial files; stat trailer names excluded-but-changed paths ---
+        import merge_ledger as ml                                    # noqa: E402
+        ok(ml.split_range(["a..b -- ':!prompts.md'"]) == ("a..b", ["--", ":!prompts.md"])
+           and ml.split_range(["a..b", "--", ":!x"]) == ("a..b", ["--", ":!x"]),
+           "split_range accepts the quoted single string and separate words alike")
 
         # --- CONTROLS.md mirrors stay byte-identical (HANDOFF.md cp-sync) ---
         repo = os.path.abspath(os.path.join(HERE, "..", ".."))

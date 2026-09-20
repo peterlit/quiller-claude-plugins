@@ -3,9 +3,18 @@
 # session's transcript and warn if it is large. Measured: the identical
 # plumbing request costs ~3.3x more in a 550K-context session than in a fresh
 # one — the single largest lever, and it needs no code. Usage:
-#   session_guard.sh [threshold_mb]   (default 2)
+#   session_guard.sh [threshold_mb] [loop-dir ...]   (default 2; .review-loop .qa-loop)
+# Once the human has accepted the cost (briefs/.session-ok exists in a loop
+# dir), the warning stands down for the rest of the session: it used to
+# fire on every prompt naming the loop — including the human's own questions
+# — with no way to acknowledge it (measured).
 set -euo pipefail
 thr="${1:-2}"
+shift || true
+dirs=("$@"); [ ${#dirs[@]} -eq 0 ] && dirs=(.review-loop .qa-loop)
+for d in "${dirs[@]}"; do
+  if [ -f "$d/briefs/.session-ok" ]; then cat >/dev/null 2>&1 || true; exit 0; fi
+done
 input="$(cat 2>/dev/null || true)"
 python3 - "$input" "$thr" <<'PYEOF'
 import json, os, re, sys
