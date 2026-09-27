@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "generated_at": "2026-09-27T16:12:50Z",
+  "plugin": {
+    "name": "arch-docs-tools",
+    "version": "0.3.1",
+    "running_from": "~/Documents/src/quiller-claude-plugins/arch-docs-tools",
+    "installed": {
+      "key": "arch-docs-tools@quiller",
+      "version": "0.2.0",
+      "path": "~/.claude/plugins/cache/quiller/arch-docs-tools/0.2.0",
+      "last_updated": "2026-09-20T22:35:43.027Z",
+      "git_commit": "949110b4b16d",
+      "symlink": false
+    },
+    "install_matches_running": false
+  },
+  "host": {
+    "repo": "quiller-claude-plugins",
+    "loop_dir": "docs/architecture",
+    "git_repo": true,
+    "loop_dir_ignored": false
+  },
+  "platform": {
+    "macos": "26.4.1",
+    "arch": "arm64",
+    "claude": "2.1.283 (Claude Code)",
+    "python": "3.14.7",
+    "git": "git version 2.50.1 (Apple Git-155)"
+  },
+  "window": {
+    "started_at": "2026-09-27T15:19:52Z",
+    "ended_at": "2026-09-27T16:12:29Z",
+    "basis": "feedback/run.json",
+    "wall_s": 3156.4
+  },
+  "survey": {
+    "total_files": 55,
+    "total_loc": 16277,
+    "top_level_dirs": 5,
+    "manifests": {
+      "xcode": 1
+    }
+  },
+  "split": "overview + 3 detail document(s)",
+  "documents": [
+    {
+      "file": "arch-docs-tools.md",
+      "bytes": 65053,
+      "lines": 1390,
+      "diagrams": 16,
+      "diagram_kinds": {
+        "flowchart": 6,
+        "sequenceDiagram": 9,
+        "erDiagram": 1
+      },
+      "not_covered_appendix": true,
+      "inference_labels": 10,
+      "written_at": "2026-09-27T15:33:11Z"
+    },
+    {
+      "file": "overview.md",
+      "bytes": 94336,
+      "lines": 1677,
+      "diagrams": 18,
+      "diagram_kinds": {
+        "flowchart": 8,
+        "sequenceDiagram": 9,
+        "erDiagram": 1
+      },
+      "not_covered_appendix": false,
+      "inference_labels": 7,
+      "written_at": "2026-09-27T16:12:29Z"
+    },
+    {
+      "file": "qa-loop-tools.md",
+      "bytes": 116642,
+      "lines": 1680,
+      "diagrams": 33,
+      "diagram_kinds": {
+        "flowchart": 12,
+        "sequenceDiagram": 18,
+        "erDiagram": 3
+      },
+      "not_covered_appendix": false,
+      "inference_labels": 8,
+      "written_at": "2026-09-27T15:37:27Z"
+    },
+    {
+      "file": "review-loop-tools.md",
+      "bytes": 126644,
+      "lines": 2369,
+      "diagrams": 30,
+      "diagram_kinds": {
+        "flowchart": 8,
+        "erDiagram": 2,
+        "sequenceDiagram": 20
+      },
+      "not_covered_appendix": false,
+      "inference_labels": 8,
+      "written_at": "2026-09-27T16:12:02Z"
+    }
+  ],
+  "lint": {
+    "ran": true,
+    "blocks": 97,
+    "issues": 0,
+    "by_kind": {}
+  },
+  "coverage": {
+    "source_files": 37,
+    "mentioned": 37,
+    "unmentioned": 0
+  },
+  "objective": {
+    "Survey": "55 source files, 16277 LOC, 1 manifest(s)",
+    "Split": "overview + 3 detail document(s)",
+    "Documents": "4 \u00b7 97 diagram(s)",
+    "Lint": "0 issue(s) in 97 block(s)",
+    "Coverage": "37/37 source files mentioned"
+  },
+  "anomalies": {
+    "count": 0,
+    "by_code": {},
+    "rows": []
+  },
+  "missing": []
+}
