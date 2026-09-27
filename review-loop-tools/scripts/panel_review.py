@@ -1074,6 +1074,28 @@ def run(args):
         if r.get("cap"):
             print(f"panel_review: lane {r['lane']} capped at {r['cap']} candidates "
                   f"({r['cap_reason']})", file=sys.stderr)
+    # The same facts, recorded for the run summary (feedback/anomalies.jsonl):
+    # the stderr banners above scroll away, and three field reports each
+    # re-described the same lane failure from memory.
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import field_log
+        for r in results:
+            st = str(r.get("status"))
+            if st != "ok":
+                why = r.get("error_kind") or r.get("note") or ""
+                field_log.anomaly(loop, f"lane-{st}",
+                                  f"lane {r.get('lane')} round {rnd}: {why}",
+                                  source="panel_review.py")
+            if r.get("cap"):
+                field_log.anomaly(loop, "lane-capped",
+                                  f"lane {r.get('lane')} round {rnd}: capped at "
+                                  f"{r['cap']} ({r.get('cap_reason')})",
+                                  source="panel_review.py")
+    except Exception:
+        pass
     # rnd may be a label ("final" for the post-stop pass), not just a number.
     summary = {"round": int(rnd) if str(rnd).isdigit() else rnd,
                "lanes": results, "failed": len(failed), "skipped": len(skipped),

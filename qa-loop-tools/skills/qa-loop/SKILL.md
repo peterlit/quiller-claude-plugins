@@ -133,8 +133,9 @@ simulator (measured).
    restarts, and stale same-named screenshots in the new loop's
    `evidence/round-1/` cost three testers turns of confusion each in two
    independent runs (35 and 1,117 stale files). The per-run state moves to
-   `.qa-loop/archive/<timestamp-sha>/`, unknown legacy top-level files to
-   its legacy/. Archive moves are per-file and FAIL LOUDLY if an
+   `.qa-loop/archive/<timestamp-sha>/` (`feedback/` rides with it — the
+   run summary and any filed field report describe THAT run), unknown
+   legacy top-level files to its legacy/. Archive moves are per-file and FAIL LOUDLY if an
    iCloud/Dropbox sync conflict spawns a ` 2`-suffixed duplicate — resolve
    that before anything else. Then rotate the notes:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py notes-rotate .qa-loop`
@@ -160,7 +161,7 @@ simulator (measured).
    any OTHER pre-existing `.gitignore` is the host's — leave it and suggest
    the upgrade in one line:
    ```
-   # Conclusions in git; evidence and scratch on disk. Managed by qa-loop-tools v0.12.0.
+   # Conclusions in git; evidence and scratch on disk. Managed by qa-loop-tools v0.16.0.
    *
    !*/
    !.gitignore
@@ -175,6 +176,9 @@ simulator (measured).
    !harness-notes-*.md
    !tools/**
    !regression-tests/**
+   !**/feedback/*.json
+   !**/feedback/*.jsonl
+   !**/feedback/*.md
    __pycache__/
    *.pyc
    ```
@@ -182,7 +186,10 @@ simulator (measured).
    `archive/<name>/ledger.json` and `archive/harness-notes-<ts>.md` stay
    tracked while archived `fragments/`, `briefs/`, evidence, and
    Finder-duplicate names never enter the index (the trailing two rules keep
-   `tools/**` from re-admitting bytecode). Check
+   `tools/**` from re-admitting bytecode). `feedback/` holds the run's
+   record for the plugin maintainer (run summary, dispatch timing,
+   anomalies, filed field reports): small, and the evidence every field
+   report cites — a conclusion. Check
    `git check-ignore -q .qa-loop`: if the repo ignores the directory,
    say so at the gate and in the report instead of claiming otherwise, and
    at the end append one line to the repo-root BACKLOG.md naming the
@@ -553,6 +560,12 @@ repo's index).
 Print a one-line verdict and the path to the report, and set
 `.qa-loop/.phase` to "done". If worker simulators exist, tear them down:
 `${CLAUDE_PLUGIN_ROOT}/scripts/provision_workers.sh down`
+The render also wrote `.qa-loop/feedback/run-summary.json` — the run's
+record for the plugin maintainer (never a section of the report, which is
+for the app's owner). Stage it by path with the other conclusions, and end
+with this one line, as an invitation and never a gate: "Feedback for the
+plugin maintainer: run `/qa-loop-tools:feedback` — the objective bundle
+takes seconds (`--quick`); answer only what you observed."
 
 ## Interrupting and resuming
 Killing a round at any point is safe: the durable state is ledger.json, the
@@ -563,6 +576,17 @@ deterministic reset makes a restart free. Never try to resume a half-finished
 test pass mid-chunk.
 
 ## Contracts (what subagents write — keep dispatches consistent with these)
+Anomalies — `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py anomaly .qa-loop "<one line>" [--code <code>]`:
+call it the MOMENT you work around the plugin or it surprises you ("hand-built
+the WF-9b chunk", "abandoned the provisioner, ran sequential"; a worker
+failing the Stage-0 probe: `--code grant-probe-failed`; the driver not
+answering ping: `--code driver-ping-failed`; a model fallback: `--code
+model-fallback`). Scripts and hooks record their own (plan lint and
+degenerated targeting, notes over the ceiling, guard denials, archive
+duplicates); both land in `feedback/anomalies.jsonl` and the run summary.
+The hooks also record every dispatch's start and return in
+`feedback/dispatches.jsonl` — wall-clock per dispatch at no token cost;
+never time dispatches by hand. Neither file changes loop state.
 LEDGER fragment (`.qa-loop/fragments/round-<N>-<slug>.json`):
 ```json
 { "findings": [ {

@@ -156,3 +156,27 @@ Because the implementer and reviewer are the same model family, the loop
 **cannot catch both agents agreeing on a wrong fix**. A human should skim the
 report's **WATCH LIST** — the seed scope, each round's largest diffs, and every trap-flagged or rejected finding —
 before trusting the result.
+
+## Feedback for the maintainer
+
+```
+/review-loop-tools:feedback
+/review-loop-tools:feedback --quick
+```
+
+Files a field report about the PLUGIN — not about your code. The script
+gathers the objective half: the plugin version that actually ran (read from
+the running code, beside the installed-plugins entry), the verdicts and
+counts, anomalies and per-dispatch wall-clock recorded during the run,
+and effective tokens per role measured from this repo's session
+transcripts. The agent adds only what it observed: answers to the
+maintainer's watch questions ([FIELD-QUESTIONS.md](FIELD-QUESTIONS.md)),
+what to keep, defects with a repro and an evidence path, friction,
+decisions it took without you, and wishes. `--quick` files the numbers
+alone.
+
+The report is written to `.review-loop/feedback/<plugin>-<version>-<date>.md`
+and copied to `~/.local/share/quiller/inbox/<repo name>/` on this machine
+(`$XDG_DATA_HOME` is honored). Nothing is sent anywhere. It contains counts,
+never finding text, file contents or commands, and paths are folded to `~`.
+The run summary (`feedback/run-summary.json`) is written at the end of every run whether or not you file a report.

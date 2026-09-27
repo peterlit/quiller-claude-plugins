@@ -209,8 +209,8 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
 - **What to commit** `[both]` — conclusions in git, evidence and scratch on
   disk; the loop-dir `.gitignore` each loop writes is the definition. It is
   DEFAULT-CLOSED (`*`, `!*/`, then one negation per conclusion: REPORT,
-  ledger, rounds, verdict — qa adds coverage, the three docs, `tools/`,
-  `regression-tests/`), so anything unanticipated — a Finder-duplicated
+  ledger, rounds, verdict, and the `feedback/` records — qa adds coverage,
+  the three docs, `tools/`, `regression-tests/`), so anything unanticipated — a Finder-duplicated
   `fragments 2/`, a stray `.pyc`, a gigabyte of screenshots — stays out of
   the index by default (measured: the old denylist let all three into one
   host repo's history). Negations match at any depth, so conclusions inside
@@ -500,6 +500,89 @@ CONVERGED is only ever declared after a verified full pass — but the WATCH
 LIST exists because decorrelated reviewers reduce, not eliminate, the chance
 of agents agreeing on a bad fix. Ten minutes here is the human half of the
 contract.
+
+## Feedback for the plugin maintainer
+
+*Surface: `/review-loop-tools:feedback`, `/qa-loop-tools:feedback`,
+`/arch-docs-tools:feedback` — and `<loop-dir>/feedback/`.*
+
+The report (`REPORT.md`) is for the owner of the repo the loop ran in.
+Feedback is for the maintainer of the plugin. They are separate files with
+separate readers, and filing feedback is always an invitation, never a gate.
+
+- **`/<plugin>:feedback`** `[both]` — files a field report in one command.
+  The script gathers the objective half (below), lays out a draft, and the
+  agent fills in only what it observed: the maintainer's watch questions
+  (`observed` / `not observed` / `n/a`), what to keep, defects in impact
+  order (what happened, expected, smallest repro, evidence path, cost,
+  suggested mechanism), friction, decisions taken without the human, items
+  seen again, host-repo recommendations, environment artifacts, wishes.
+  Every item gets an id — `<rl|qa|ad>-<version>-<yyyymmdd>-<host>-<n>` —
+  that proposals and commit messages cite.
+  *In practice:* run it right after a loop, in the same session, while the
+  run is still in context. Empty sections are a good answer.
+- **`--quick`** `[both]` — the objective bundle alone: no questions, no
+  writing. Version, verdicts, anomalies and measured cost.
+  *In practice:* the floor. File it even when you have nothing to say.
+- **Where it goes** `[both]` — two places, both on this machine, nothing
+  sent anywhere: the report is written to
+  `<loop-dir>/feedback/<plugin>-<version>-<date>.md` (a conclusion:
+  allowlisted, committed by explicit path with the run summary beside it),
+  and the same file is copied to
+  `${XDG_DATA_HOME:-~/.local/share}/quiller/inbox/<host>/` — the drop the
+  maintainer's ingest reads. The drop is outside every repo by rule: a
+  session in one repo never writes into another repo's tree. On another
+  machine, send the one file by any means; it is self-contained.
+  *In practice:* do not write reports to `docs/reports/` or anywhere else
+  by hand — a file outside the drop is only found if someone goes looking.
+- **`feedback/run-summary.json`** `[both]` — written by `render_report.py`
+  at report time, whether or not anyone files feedback: the plugin version
+  read from the code that ran (beside the `installed_plugins.json` entry —
+  a mismatch means a symlinked or `--plugin-dir` install), platform,
+  settings, the verdict row per round, finding COUNTS by severity and
+  status, fix-review rejections, proposals, unattended defaults, hygiene
+  violations, reported usage, panel tallies and lane telemetry, dispatch
+  wall-clock, anomalies. Counts only — never a finding's claim, id or
+  evidence, and paths are folded to `~`.
+- **`feedback/dispatches.jsonl`** `[both]` — the Agent-tool hook records
+  each dispatch's start (agent, label, session size) and the SubagentStop
+  hook its return, so wall-clock per dispatch costs no tokens and nobody
+  times dispatches by hand.
+- **`feedback/anomalies.jsonl`** `[both]` — every place the run left the
+  documented path. Scripts and hooks record their own: `lane-error`,
+  `lane-timeout`, `lane-skipped`, `lane-cached`, `lane-capped`,
+  `lane-disabled-by-precision` `[review]`; `mutate-baseline-red`,
+  `mutate-dirty-refused`, `mutate-allow-dirty` `[review]`;
+  `plan-lint-problem`, `plan-degenerated`, `plan-unchunked`,
+  `notes-over-ceiling` `[qa]`; `dispatch-count-mismatch`,
+  `session-gate-blocked`, `read-guard-denied`, `commit-guard-denied`,
+  `commit-guard-no-jq`, `archive-duplicates`, `archive-late-duplicates`,
+  `hygiene-violation` `[both]`. The orchestrator records the rest with
+  `merge_ledger.py anomaly <loop-dir> "<one line>" [--code <code>]` — the
+  moment it works around the plugin (`workaround`, the default), a worker
+  fails the grant probe (`grant-probe-failed`), the driver does not answer
+  (`driver-ping-failed`), a completion is notified twice
+  (`usage-repeat-notification`), or a pinned agent falls back to another
+  model (`model-fallback`). `FIELD_LOG_OFF=1` silences all of it.
+  *In practice:* guard denials record WHICH rule fired, never the command.
+- **`loop_usage.py`** `[both]` — effective tokens from this repo's session
+  transcripts: `input×1 + cache_read×0.1 + cache_write×2 + output×5`,
+  deduplicated by request id, images 1,600 flat — the accounting every
+  prior measurement used, so figures compare across repos and versions.
+  The project directory is derived from the repo path; `--since`/`--until`
+  filter per record; output is per role and per dispatch. The feedback
+  command runs it over the loop's own window (first dispatch to report).
+  *In practice:* never re-derive token tables by hand or with a scratch
+  script.
+- **`FIELD-QUESTIONS.md`** `[both]` — ships at each plugin's root, versioned
+  with the code: the watch items for this version, the settled decisions
+  (report only NEW evidence against them), and what happened to earlier
+  field items by id (shipped in which version, declined and why, backlog).
+  *In practice:* read the last two sections before writing a defect; an
+  item already listed goes under "Seen again" by id.
+- **Archive** `[both]` — `feedback/` moves with its loop into
+  `archive/<name>/`. Feedback filed after a loop was archived reports on
+  the newest archive and says so.
 
 ## Playbooks
 

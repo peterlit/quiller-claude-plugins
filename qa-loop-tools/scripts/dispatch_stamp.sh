@@ -14,14 +14,24 @@
 #    which the Stop hook blocked ordinary turns (measured: three times in
 #    one run, again the next). The SubagentStop hook decrements and strips
 #    the suffix only when the count reaches zero.
+# 4. Record the dispatch in feedback/dispatches.jsonl (start time, agent,
+#    session size). The SubagentStop hook records the return, so the run
+#    summary carries wall-clock per dispatch at no token cost (measured: one
+#    field agent hand-timed every dispatch, the other had no timing at all).
+#    A dispatch the gate BLOCKS is not recorded — it did not happen.
 # Usage: dispatch_stamp.sh <loop-dir> [threshold_mb]   (default 2)
 set -euo pipefail
 d="${1:-.review-loop}"; thr="${2:-2}"
 input="$(cat 2>/dev/null || true)"
 [ -f "$d/.phase" ] || exit 0
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+logstart() {
+  printf '%s' "$input" | python3 "$here/field_log.py" dispatch-start "$d" \
+    >/dev/null 2>&1 || true
+}
 p="$(cat "$d/.phase")"
 case "$p" in
-  *:waiting:*) exit 0 ;;
+  *:waiting:*) logstart; exit 0 ;;
   *:dispatched)
     # Already marked: a SECOND live dispatch — count it and keep the mark.
     python3 - "$d/briefs/.dispatched" <<'PYEOF'
@@ -35,6 +45,7 @@ with open(p, "a+") as fh:
     except ValueError: n = 1
     fh.seek(0); fh.truncate(); fh.write(f"{n + 1}\n")
 PYEOF
+    logstart
     exit 0 ;;
   round*|seed*) : ;;
   *) exit 0 ;;
@@ -51,12 +62,16 @@ size = os.path.getsize(tp) if tp and os.path.exists(tp) else 0
 sys.exit(1 if size / 1048576 > float(sys.argv[2]) else 0)
 PYEOF
   then
+    python3 "$here/field_log.py" anomaly "$d" session-gate-blocked \
+      "first dispatch blocked: session transcript over ${thr} MB" \
+      --source dispatch_stamp.sh >/dev/null 2>&1 || true
     echo "dispatch_stamp: this session's transcript exceeds ${thr} MB — loop plumbing costs ~3x here (measured 8.5M vs 2.6M over 22 rounds). Confirm with the human: restart the loop in a FRESH session, or proceed here by running \`mkdir -p $d/briefs && touch $d/briefs/.session-ok\` and re-dispatching." >&2
     exit 2
   fi
   mkdir -p "$d/briefs"
   touch "$d/briefs/.session-ok"
 fi
+logstart
 printf '%s:dispatched\n' "$p" > "$d/.phase"
 mkdir -p "$d/briefs"
 printf '1\n' > "$d/briefs/.dispatched"

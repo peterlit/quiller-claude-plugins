@@ -1,6 +1,9 @@
 # Proposal: a frictionless feedback path from field agents to the maintainer
 
-Written 2026-09-13. Status: **proposed, not approved, nothing built.**
+Written 2026-09-13. Status: **BUILT 2026-09-26** as review-loop-tools 0.15.0 /
+qa-loop-tools 0.16.0 / arch-docs-tools 0.3.0 (Peter: "Go"). The text below is
+the proposal as approved; "As built" at the end lists every place the build
+departs from it.
 
 ## The problem, measured against the current cycle
 
@@ -360,3 +363,51 @@ or not at all.
 Unchanged: the delivery drop, the one-command skill, `--quick`, and every
 decline in Part C. Judgment calls J1–J5 stand and are put to Peter together
 with the 2026-09-20 proposal's.
+
+---
+
+## As built — 2026-09-26
+
+Parts A and B were built in full, with the 2026-09-20 revision. Where the
+build departs from the text above:
+
+| Proposal | As built | Why |
+|---|---|---|
+| Ships as review 0.14.0 / qa 0.15.0 | review **0.15.0** / qa **0.16.0** / arch-docs **0.3.0** | 0.14.0/0.15.0 went to the panel field reports first. |
+| `render_report.py` writes the summary | `run_summary.py` builds it; `render_report.py` calls it in a guarded block | Keeps `render_report.py`'s review/qa divergence panel-only, and lets `feedback.py` build a summary for a loop that never reached the report stage. A summary failure can never fail a report. |
+| `merge_ledger.py anomaly` is the recorder | `field_log.py` is; the verb delegates to it | Hooks and qa-/review-only scripts need it without importing the ledger code. One module also owns dispatch timing. |
+| The skill asks questions and mints ids | `feedback.py scaffold` writes a draft, the agent edits it, `feedback.py finalize` validates, mints ids, appends the JSON and copies to the drop; `quick` does both | Everything mechanical is a script (HANDOFF section 3, "the orchestrator is plumbing"). The skill is 60 lines. |
+| Watch items are numbered | Slugs: `w-dispatch-overlap`, `s-set-usage-replaces` | An item that stays on watch for three releases keeps its name; numbers would shift. |
+| Usage window from "the loop's first rounds.md entry" | From the ledger's creation and the first recorded dispatch, to the report | `rounds.md` rows carry no timestamps — the 2026-09-20 weatherapp report hit exactly this. |
+| Summary lists findings by severity and `current_status` | COUNTS only; no finding id, claim, region or evidence; hygiene and guard anomalies record the KIND, never a name or command; paths folded to `~` | The file leaves the host repo (the concern behind decline D1). The selftest plants a marker string in a finding and asserts it reaches neither the summary nor the report. |
+| Ingest copies reports "under their own names" into `docs/inbox/` | Into `docs/inbox/<host>/` | Two hosts filing the same plugin version on the same day produce the same file name. |
+| Anomaly code `session-ok-created` | `session-gate-blocked`; each dispatch row also records the session transcript's size | Creating `.session-ok` under the threshold is the normal path. The block is the event, and session size per dispatch is the number behind it. |
+| Lane codes `skipped`/`error`/`timeout`/`cached`/`capped` | `lane-skipped`, `lane-error`, … plus `lane-disabled-by-precision` | One flat vocabulary across scripts. |
+| Grant-probe and driver-`ping` failures recorded by scripts | Recorded by the orchestrator (`--code grant-probe-failed`, `driver-ping-failed`); the qa skill says when | No script performs either probe: the grant probe is a micro-dispatch, the ping is a command the orchestrator runs. |
+| — | Added codes: `commit-guard-denied`, `mutate-allow-dirty`, `plan-unchunked`, `model-fallback` | Each is a decision a shipped script or the skill already makes. |
+| — | `feedback.py` adds the three `feedback/` rules to an OLDER plugin-managed allowlist | Every loop bootstrapped before this release ignores `feedback/`; the first report from the field would have been filed into a directory git cannot see. A host-owned `.gitignore` is never touched. |
+| — | Feedback filed after a loop was archived reports on the newest archive | `feedback/` rides with its loop; the next loop's Setup archives before anyone may have filed. |
+| — | `session_guard.sh` stands down for `/<plugin>:feedback` and `:controls` prompts | Both name the plugin, neither starts a loop, and feedback is filed from the session the loop just ran in. |
+| — | `arch_summary.py start` at Stage 1 | arch-docs has no loop state to date a run from. |
+| — | `coverage_check.py` skips `<docs-dir>/feedback/` | A field report that names a source file must not count as documentation coverage. |
+
+Not built, deliberately:
+
+- **Dispatch timing for arch-docs-tools.** It has no hooks and no phase
+  marker; its summary carries the run's wall-clock only.
+- **The three arch-docs script defects** named in the problem table
+  (coverage skips `.sh`, survey ignores `.md`; the erDiagram lint false
+  positive was fixed in 0.2.0). They were never filed; they are now watch
+  item `w-coverage-blind-spot` and a BACKLOG line, waiting for a report
+  that measures them.
+- **Pruning the drop.** Ingest reads it and never deletes from it.
+
+Validation as executed: `feedback_selftest.py` 94 checks, run against both
+loop plugins; `hooks_selftest.py` 19; `panel_selftest.py` 137; the usage
+script reproduced `docs/inbox/loop-usage.py`'s total to the token on the
+weatherapp project directory (433 transcripts, 509,373,423 effective) and
+reproduced the nine per-dispatch figures the 2026-09-20 weatherapp report
+assembled by hand (subagents 2,447,428). The three smoke cases from Part E
+step 2 ran in scratch directories: a quick bundle on a loop with no
+summary, a full report answering every watch item, and a run whose
+`installed_plugins.json` disagrees with `plugin.json`.

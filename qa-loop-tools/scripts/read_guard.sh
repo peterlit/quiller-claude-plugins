@@ -15,7 +15,8 @@ for d in "${dirs[@]}"; do
 done
 if [ -z "$active" ]; then cat >/dev/null 2>&1 || true; exit 0; fi
 input="$(cat 2>/dev/null || true)"
-python3 - "$input" "$active" "$phase" <<'PYEOF' || exit 2
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 - "$input" "$active" "$phase" "$here" <<'PYEOF' || exit 2
 import json, os, re, sys
 raw, loop, phase = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
@@ -23,7 +24,16 @@ try:
 except Exception:
     sys.exit(0)
 
-def deny(msg):
+def deny(msg, rule="other"):
+    # Telemetry: WHICH rule fired, never the command (it names host paths).
+    # A rule that fires forty times in a run is a prompt problem worth
+    # knowing about; one that never fires is a rule worth questioning.
+    try:
+        sys.path.insert(0, sys.argv[4])
+        import field_log
+        field_log.anomaly(loop, "read-guard-denied", rule, source="read_guard.sh")
+    except Exception:
+        pass
     print("read_guard: " + msg, file=sys.stderr)
     sys.exit(1)
 
@@ -56,21 +66,24 @@ if not filtered:
         if n > 200:
             deny(f"`cat` of a {n}-line file dumps it all into context. Locate with "
                  f"`grep -n`, then read a window of <=120 lines: `sed -n 'A,Bp' "
-                 f"{m.group(1)}` or the Read tool with offset/limit.")
+                 f"{m.group(1)}` or the Read tool with offset/limit.",
+                 f"cat of a {n}-line file")
     m = re.search(r"\bhead\s+(?:-n\s*|-)(\d+)", cmd)
     if m and int(m.group(1)) > 200:
         deny(f"`head -{m.group(1)}` puts {m.group(1)} lines into context. Read <=120 "
-             f"lines per call; locate with `grep -n` first.")
+             f"lines per call; locate with `grep -n` first.",
+             f"head window of {m.group(1)} lines")
     m = re.search(r"\bsed\s+-n\s+'?\"?(\d+),(\d+)p", cmd)
     if m and int(m.group(2)) - int(m.group(1)) > 200:
         deny(f"`sed -n {m.group(1)},{m.group(2)}p` is a {int(m.group(2)) - int(m.group(1))}-line "
-             f"window. Keep windows <=120 lines; locate with `grep -n` first.")
+             f"window. Keep windows <=120 lines; locate with `grep -n` first.",
+             f"sed window of {int(m.group(2)) - int(m.group(1))} lines")
 
 if re.search(CMD_START + r"(?:xcrun\s+)?xcodebuild\b[^|;&]*\btest\b|" + CMD_START + r"swift\s+test\b", cmd) and not filtered:
     deny("full test output lands in context (one unfiltered app-suite run measured at "
          "~150K tokens). Append `2>&1 | grep -E 'error:|failed|Executed|passed|Test Suite'`, "
          "or redirect to a file and grep it. Run the scoped verify_cmd in rounds; the full "
-         "suite runs once, at closeout.")
+         "suite runs once, at closeout.", "unfiltered test run")
 
 m = re.match(r"round-(\d+)-", phase)
 if m and re.search(CMD_START + r"git\s+(diff|show)\b", cmd) and not filtered \
@@ -82,6 +95,7 @@ if m and re.search(CMD_START + r"git\s+(diff|show)\b", cmd) and not filtered \
         deny(f"the round diff is already on disk. Read `{os.path.join(loop, 'briefs', f'round-{n}.stat')}` "
              f"first, then per-file hunks from `{dfile}` (`grep -n '^diff --git' {dfile}` gives "
              f"offsets; `sed -n` a window). Re-pulling the whole diff costs ~30-60K tokens each time; "
-             f"a single-file diff is fine: `git diff <range> -- <path>`.")
+             f"a single-file diff is fine: `git diff <range> -- <path>`.",
+             "whole-diff re-pull")
 PYEOF
 exit 0

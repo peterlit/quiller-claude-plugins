@@ -12,6 +12,7 @@ Usage:
   merge_ledger.py add-usage <ledger.json> <round> <role> <tokens>   (accumulates)
   merge_ledger.py diff <loop-dir> <round> <range>
   merge_ledger.py next-round <loop-dir> <round> [--fragment F] [--sha S] [--pass full|targeted] [--phase-next NAME] [--brief-severity major|minor]
+  merge_ledger.py anomaly <loop-dir> "<one line>" [--code CODE]
 
 Merge mode: the fragment is {"findings": [...]}. Existing findings are
 updated (scalar fields overwritten, evidence lists unioned, status_history
@@ -35,13 +36,61 @@ so a tester chunk receives the findings relevant to its workflows, not the
 whole ledger. Merges record severity changes in severity_history.
 
 archive: moves a finished loop's state (ledger.json, rounds.md, REPORT.md,
-coverage.json, fragments/, briefs/, .phase) into <loop-dir>/archive/<name>/,
-so a fresh loop starts clean instead of piling files at one level. Default
-name: timestamp plus the ledger's sha.
+coverage.json, fragments/, briefs/, feedback/, .phase) into
+<loop-dir>/archive/<name>/, so a fresh loop starts clean instead of piling
+files at one level. Default name: timestamp plus the ledger's sha.
+
+anomaly: appends one line to <loop-dir>/feedback/anomalies.jsonl — the
+record of every place the run deviated from the documented path. Scripts
+call it where they already detect a deviation; the orchestrator calls it
+whenever it works around the plugin. It feeds the run summary and the
+field report, and never changes loop state.
 """
 import json, os, shlex, sys
 
 VALID_STATUS = {"open", "partial", "fixed", "wontfix", "disputed"}
+
+def note_anomaly(loop, code, detail):
+    """Best-effort field telemetry (feedback/anomalies.jsonl). Never raises
+    and never changes what the calling verb does or prints."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import field_log
+        return field_log.anomaly(loop, code, detail, source="merge_ledger.py")
+    except Exception:
+        return None
+
+def anomaly(args):
+    """Record a deviation the moment it happens. Field reports are made of
+    two things — "the script fell back" and "I worked around it" — and both
+    were being reconstructed from memory hours later (measured: a decisions
+    record arrived eleven days after the run it described)."""
+    code, pos = "workaround", []
+    it = iter(args)
+    for a in it:
+        if a == "--code":
+            code = next(it, "workaround")
+        elif a.startswith("--code="):
+            code = a.split("=", 1)[1]
+        else:
+            pos.append(a)
+    if len(pos) < 2 or not " ".join(pos[1:]).strip():
+        print('usage: merge_ledger.py anomaly <loop-dir> "<one line>" [--code CODE]',
+              file=sys.stderr)
+        sys.exit(2)
+    loop = pos[0]
+    if not os.path.isdir(loop):
+        print(f"merge_ledger: {loop} is not a loop directory", file=sys.stderr)
+        sys.exit(1)
+    row = note_anomaly(loop, code, " ".join(pos[1:]))
+    if not row:
+        print("merge_ledger: anomaly not recorded (FIELD_LOG_OFF set, or "
+              f"{loop}/feedback is not writable)", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"recorded": row["code"], "detail": row["detail"],
+                      "file": os.path.join(loop, "feedback", "anomalies.jsonl")}))
 
 def resolve(args):
     if len(args) < 4:
@@ -357,6 +406,10 @@ def notes_rotate(args):
         with open(p, "w") as fh:
             fh.write("".join(keep))
     size = os.path.getsize(p)
+    if size > CEIL:
+        note_anomaly(loop, "notes-over-ceiling",
+                     f"HARNESS_NOTES.md {size} bytes > ceiling {CEIL} after rotation "
+                     f"({pinned_kept} protected section(s) kept)")
     print(json.dumps({"rotated_sections": len(drop), "ceiling_sections": len(second),
                       "pinned_kept": pinned_kept, "ceiling_bytes": CEIL,
                       "kept_bytes": size, "over_ceiling": size > CEIL}))
@@ -446,6 +499,17 @@ def next_round(args):
             i += 1
     ledger_path = os.path.join(loop, "ledger.json")
     here = os.path.dirname(os.path.abspath(__file__))
+    # A round is closing: every agent it dispatched has returned, so the
+    # live-dispatch counter must read 0. Non-zero means a return was never
+    # counted (a crashed agent, a hook that did not fire) — telemetry only.
+    try:
+        with open(os.path.join(loop, "briefs", ".dispatched")) as fh:
+            live = int((fh.read() or "0").strip() or 0)
+    except (OSError, ValueError):
+        live = 0
+    if live > 0:
+        note_anomaly(loop, "dispatch-count-mismatch",
+                     f"briefs/.dispatched read {live} when round {rnd} closed")
     is_qa = os.path.basename(os.path.abspath(loop)) == ".qa-loop" or os.path.exists(os.path.join(here, "qa_metrics.py")) and not os.path.exists(os.path.join(here, "metrics.py"))
     out = {"round": rnd}
     # Record where this round's change ENDS (HEAD now: the reviewer never
@@ -568,8 +632,11 @@ def archive(args):
     def dup_report():
         if not os.path.exists(hygiene):
             return set()
+        # FIELD_LOG_OFF: these scans are archive's own bookkeeping — the
+        # duplicates that matter are recorded below, once, in the live loop.
         h = subprocess.run(["bash", hygiene, loop_dir],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True,
+                           env=dict(os.environ, FIELD_LOG_OFF="1"))
         return {l for l in h.stdout.splitlines() if "duplicate name" in l}
 
     pre_dups = dup_report()
@@ -602,8 +669,10 @@ def archive(args):
                           else os.path.join(dst, rel, fn))
         shutil.rmtree(src, ignore_errors=True)
 
+    # feedback/ rides with its loop: the run summary, the dispatch and
+    # anomaly records, and any filed field report describe THAT run.
     for item in ("ledger.json", "rounds.md", "REPORT.md", "coverage.json",
-                 "verdict.json", "fragments", "briefs", ".phase"):
+                 "verdict.json", "fragments", "briefs", "feedback", ".phase"):
         src = os.path.join(loop_dir, item)
         if os.path.exists(src):
             os.makedirs(dest, exist_ok=True)
@@ -652,6 +721,14 @@ def archive(args):
     print(json.dumps({"archived_to": dest, "moved": moved,
                       "duplicates_detected": len(dup_lines),
                       "duplicates_detected_late": len(late)}))
+    if dup_lines:
+        note_anomaly(loop_dir, "archive-duplicates",
+                     f"{len(dup_lines)} sync-conflict duplicate name(s) appeared "
+                     f"during archive to archive/{name}")
+    if late:
+        note_anomaly(loop_dir, "archive-late-duplicates",
+                     f"{len(late)} duplicate name(s) appeared after the "
+                     f"{settle:g}s settle pass (archive/{name})")
     dup_lines = dup_lines + late
     if dup_lines:
         for l in dup_lines:
@@ -686,7 +763,7 @@ def main():
     verbs = {"resolve": resolve, "set-round": set_round, "consulted": consulted,
              "open": open_findings, "archive": archive, "scope": set_scope,
              "set-usage": set_usage, "add-usage": add_usage,
-             "diff": write_diff, "next-round": next_round,
+             "diff": write_diff, "next-round": next_round, "anomaly": anomaly,
              "notes-rotate": notes_rotate}
     if len(sys.argv) >= 2 and sys.argv[1] in verbs:
         verbs[sys.argv[1]](sys.argv[2:])

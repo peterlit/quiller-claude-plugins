@@ -8,12 +8,22 @@
 set -euo pipefail
 
 loopdir="${1:-}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Telemetry for the run summary; records WHICH rule, never the command.
+note() {
+  [ -n "$loopdir" ] || return 0
+  python3 "$here/field_log.py" anomaly "$loopdir" "$@" --source commit_guard.sh \
+    >/dev/null 2>&1 || true
+}
 
 # Read the intended command from stdin if provided.
 input="$(cat 2>/dev/null || true)"
 cmd=""
+have_jq=1
 if command -v jq >/dev/null 2>&1 && [ -n "$input" ]; then
   cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+else
+  command -v jq >/dev/null 2>&1 || have_jq=0
 fi
 
 # Staging discipline — active only while a loop is LIVE: .phase says
@@ -29,23 +39,31 @@ if [ -n "$loopdir" ] && [ -f "$loopdir/.phase" ]; then
     round*|seed*|awaiting-human*) live=1 ;;
   esac
 fi
+if [ "$live" -eq 1 ] && [ "$have_jq" -eq 0 ]; then
+  # Without jq the command is unreadable and every rule below fails OPEN.
+  note commit-guard-no-jq "jq not on PATH: staging rules are not enforced" --once
+fi
 if [ "$live" -eq 1 ]; then
   case "$cmd" in
     *"git add"*)
       ldre="$(printf '%s' "$loopdir" | sed 's/\./\\./g')"
       if printf '%s' "$cmd" | grep -qE 'git add[^|;&]*[[:space:]](-A|--all)([[:space:]]|$)'; then
+        note commit-guard-denied "git add -A/--all"
         echo "commit_guard: 'git add -A/--all' is blocked while a loop is live (${loopdir}/.phase in flight) — stage the exact files you changed by path" >&2
         exit 2
       fi
       if printf '%s' "$cmd" | grep -qE 'git add[^|;&]*[[:space:]](-f|--force)([[:space:]]|$)'; then
+        note commit-guard-denied "git add -f"
         echo "commit_guard: 'git add -f' is blocked while a loop is live — if the allowlist ignores it, it is scratch and stays out of git" >&2
         exit 2
       fi
       if printf '%s' "$cmd" | grep -qE 'git add[^|;&]*[[:space:]]\.(/)?([[:space:]]|$|;)'; then
+        note commit-guard-denied "git add ."
         echo "commit_guard: 'git add .' is blocked while a loop is live (${loopdir}/.phase in flight) — stage the exact files you changed by path" >&2
         exit 2
       fi
       if printf '%s' "$cmd" | grep -qE "git add[^|;&]*[[:space:]](\./)?${ldre}(/)?([[:space:]]|\$|;)"; then
+        note commit-guard-denied "loop-dir directory add"
         echo "commit_guard: directory-adding ${loopdir} is blocked — add its conclusion files by name (REPORT.md, ledger.json, rounds.md, ...)" >&2
         exit 2
       fi

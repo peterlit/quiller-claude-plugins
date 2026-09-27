@@ -13,12 +13,17 @@
 #     the real file under a name the loop never reads
 #   - tracked files over 256KB (conclusions are small; big blobs are evidence)
 #   - a missing or denylist-style .gitignore (the allowlist starts with "*")
+# Violations of the first three kinds are also recorded as anomalies
+# (feedback/anomalies.jsonl, KIND only — names stay in this output): a
+# .gitignore that is missing at bootstrap is the normal first-run state.
 set -u
 dir="${1:-}"
 [ -n "$dir" ] && [ -d "$dir" ] || exit 0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 issues=0
+scratch=0; dups=0; large=0
 say() { issues=$((issues+1)); echo "hygiene($dir): $*"; }
 
 tracked="$(git ls-files -- "$dir" 2>/dev/null || true)"
@@ -29,6 +34,7 @@ if [ -n "$tracked" ]; then
     [ -n "$f" ] || continue
     if printf '%s\n' "$f" | grep -qE '(^|/)(evidence|fragments|briefs|scratch|__pycache__)( [0-9]+)?/|(^|/)\.phase$|\.pyc$'; then
       say "scratch tracked: $f — fix: git rm --cached '$f'"
+      scratch=$((scratch+1))
     fi
   done <<EOF
 $tracked
@@ -45,6 +51,7 @@ if [ -n "$dupes" ]; then
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     canon="$(printf '%s\n' "$f" | sed -E 's/ [0-9]+(\.[A-Za-z0-9]+)?$/\1/')"
+    dups=$((dups+1))
     if [ -e "$canon" ]; then
       say "duplicate name: $f (plain-named '$canon' exists) — remove or merge the duplicate; never write to a space-suffixed name"
     else
@@ -62,6 +69,7 @@ if [ -n "$tracked" ]; then
     sz="$(wc -c < "$f" | tr -d '[:space:]')"
     if [ "${sz:-0}" -gt 262144 ]; then
       say "large tracked file: $f (${sz} bytes > 256KB) — conclusions are small; evidence belongs on disk"
+      large=$((large+1))
     fi
   done <<EOF
 $tracked
@@ -78,6 +86,14 @@ else
     say "$gi is a denylist (first rule: '${first}') — suggest upgrading to the shipped allowlist ('*', '!*/', then one negation per conclusion); do not overwrite it silently"
   fi
 fi
+
+note() {
+  python3 "$here/field_log.py" anomaly "$dir" hygiene-violation "$1" \
+    --source hygiene_check.sh --dedupe >/dev/null 2>&1 || true
+}
+[ "$scratch" -gt 0 ] && note "$scratch scratch path(s) tracked in git"
+[ "$dups" -gt 0 ] && note "$dups Finder-duplicate name(s)"
+[ "$large" -gt 0 ] && note "$large tracked file(s) over 256KB"
 
 [ "$issues" -eq 0 ] && echo "hygiene($dir): clean"
 exit 0

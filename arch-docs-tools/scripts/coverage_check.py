@@ -22,7 +22,10 @@ def main():
         sys.exit(2)
     docs_dir, root = sys.argv[1], os.path.abspath(sys.argv[2])
     text = ""
-    for dp, _, fn in os.walk(docs_dir):
+    for dp, dn, fn in os.walk(docs_dir):
+        # Field reports and run summaries are about the docs, not part of
+        # them: a report that names a file must not count as coverage.
+        dn[:] = [d for d in dn if d != "feedback"]
         for n in fn:
             if n.endswith(".md"):
                 with open(os.path.join(dp, n), encoding="utf-8",

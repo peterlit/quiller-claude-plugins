@@ -13,6 +13,8 @@ different location only if the user names one).
 
 ## Stage 1 — Survey
 
+First mark the start of the run (it gives the run's cost measurement its
+window): `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/arch_summary.py start docs/architecture`
 Run: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/repo_survey.py`
 Skim the README and any docs for what the system is. From the survey's
 manifests and per-directory stats, identify candidate DELIVERABLES —
@@ -72,3 +74,13 @@ One short block: files written, deliverable split used and why, diagram
 count, coverage numbers (mentioned/total from the coverage check), anything
 that failed validation, and suggested next steps (e.g. re-run after major
 refactors; the docs cite paths, so they age with the code).
+
+Then write the run's record for the plugin maintainer —
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/arch_summary.py write docs/architecture`
+(`docs/architecture/feedback/run-summary.json`: split, diagram counts, lint
+and coverage numbers; counts only, no document text) — and end with this one
+line, as an invitation and never a gate: "Feedback for the plugin
+maintainer: run `/arch-docs-tools:feedback` — the objective bundle takes
+seconds (`--quick`); answer only what you observed." Whenever you work
+around the plugin during the run, record it at that moment:
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/field_log.py anomaly docs/architecture workaround "<one line>"`

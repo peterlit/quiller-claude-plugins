@@ -1,5 +1,34 @@
 # Backlog
 
+## From the agent-feedback process build (review 0.15.0 / qa 0.16.0 / arch-docs 0.3.0)
+
+- **Six defects reported against review-loop-tools 0.14.0 await a proposal**
+  (`rl-0.14.0-20260920-weatherapp-0..5`, `new` in
+  `docs/inbox/dispositions.json`). Not touched by the feedback build.
+- **Regenerate `docs/architecture/`.** The docs cite line numbers and
+  predate six new scripts and a new skill per plugin; re-dispatch the
+  documenters (`/arch-docs-tools:arch-docs`), do not hand-edit.
+- **arch-docs coverage and survey disagree on what a source file is.**
+  `repo_survey.py` counts `.sh`, `.sql`, `.css`, `.html` and `.h`;
+  `coverage_check.py` counts none of them, and neither counts `.md` — so a
+  repo made of shell and Markdown (this one) reports coverage over a
+  fraction of what it surveyed. Found while writing the feedback proposal,
+  never filed from the field; watch item `w-coverage-blind-spot` asks for
+  a measurement before anything changes.
+- **A report from another machine.** The drop is machine-local. The report
+  file is self-contained and `ingest_feedback.py <path>` takes it, but
+  nothing moves it; if a field agent ever runs off this Mac, decide the
+  channel then (the proposal declined GitHub Issues for today's setup).
+- **The drop is never pruned.** `~/.local/share/quiller/inbox/` grows by
+  one small file per report; ingest skips what `docs/inbox/` already has.
+- **Ingest's settled-decision patterns are hand-maintained** (`SETTLED` in
+  `tools/ingest_feedback.py`). A settled decision added to HANDOFF section 3
+  and FIELD-QUESTIONS needs a pattern there too, or its re-reports go
+  untagged. Generating the patterns from FIELD-QUESTIONS would need a
+  keyword line per decision.
+- **No dispatch timing for arch-docs-tools** (it has no hooks); its run
+  summary carries the run's wall-clock only.
+
 ## From the 2026-09-13/19/20 panel field reports (shipped as review 0.14.0 / qa 0.15.0)
 
 - **Synced-volume scratch isolation** (deferred as C7 in

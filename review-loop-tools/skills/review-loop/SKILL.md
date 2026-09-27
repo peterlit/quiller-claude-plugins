@@ -69,7 +69,7 @@ You orchestrate an iterative review loop between the `implementer` and
    by a previous session; confirm with the human if unsure) — archive it
    before anything else:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py archive .review-loop`
-   (moves ledger, rounds, report, fragments, briefs, .phase, and
+   (moves ledger, rounds, report, fragments, briefs, feedback, .phase, and
    `evidence/round-*` into `.review-loop/archive/<timestamp-sha>/`; pass a
    name to override). Never pile a new loop's files next to an old one's.
    Repos under iCloud/Dropbox can grow ` 2`-suffixed duplicate names during
@@ -99,7 +99,7 @@ You orchestrate an iterative review loop between the `implementer` and
    pre-existing `.gitignore` is the host's — leave it and suggest the
    upgrade in one line:
    ```
-   # Conclusions in git; evidence and scratch on disk. Managed by review-loop-tools v0.12.0.
+   # Conclusions in git; evidence and scratch on disk. Managed by review-loop-tools v0.15.0.
    *
    !*/
    !.gitignore
@@ -108,11 +108,16 @@ You orchestrate an iterative review loop between the `implementer` and
    !rounds.md
    !verdict.json
    !panel.json
+   !**/feedback/*.json
+   !**/feedback/*.jsonl
+   !**/feedback/*.md
    ```
    Conclusions are re-included by exact name at ANY depth — so
    `archive/<name>/ledger.json` stays tracked while archived `fragments/`,
    `briefs/`, and Finder-duplicate names (`ledger 2.json`) never enter the
-   index. Check `git check-ignore -q
+   index. `feedback/` holds the run's record for the plugin maintainer (run
+   summary, dispatch timing, anomalies, filed field reports): small, and
+   the evidence every field report cites — a conclusion. Check `git check-ignore -q
    .review-loop`: if the repo ignores the whole directory, say so now and in
    the report ("loop state is not versioned in this repo") instead of
    claiming otherwise — and at the end, append one line to the repo-root
@@ -418,7 +423,13 @@ report-time check once said clean while `ledger 2.json` sat in the
 archive). The WATCH LIST's diff candidates end each round at the sha
 `next-round` recorded and list the closeout commit as its own candidate —
 the commit with no round after it. Print a one-line verdict and the path
-to the report.
+to the report. The render also wrote `.review-loop/feedback/run-summary.json`
+— the run's record for the plugin maintainer (never a section of the
+report, which is for this repo's owner). Stage it by path with the other
+conclusions, and end with this one line, as an invitation and never a gate:
+"Feedback for the plugin maintainer: run `/review-loop-tools:feedback` —
+the objective bundle takes seconds (`--quick`); answer only what you
+observed."
 
 ## Contracts (canonical fields and verbs)
 A finding's live status is `current_status`; a field named `status` exists
@@ -447,6 +458,11 @@ merge_ledger.py's verbs:
   section renders from it; "kept" = confirmed + demoted; the verified file itself is scratch)
 - open … wontfix: `merge_ledger.py open <ledger> wontfix` (the accepted-disagreement set, for the
   final-pass verifier's dedupe)
+- anomaly:   `merge_ledger.py anomaly <loop-dir> "<one line>" [--code <code>]` — call it the MOMENT you
+  work around the plugin or it surprises you ("re-ran the gemini lane by hand", "second completion
+  notification for the round-2 reviewer": `--code usage-repeat-notification`, a model fallback:
+  `--code model-fallback`). Scripts and hooks record their own (lane failures, guard denials,
+  refusals); both land in `feedback/anomalies.jsonl` and the run summary. It never changes loop state.
 The CHANGES block carries `verify_cmd` (scoped tests the reviewer reruns).
 Hooks active during a loop: `read_guard` denies whole-file dumps,
 unfiltered test runs, and whole-diff re-pulls (with the fix in the message);
@@ -459,6 +475,9 @@ live dispatches in `briefs/.dispatched` (the SubagentStop hook decrements
 and strips the mark at zero);
 `session_guard` reports the session transcript size when a loop is invoked
 and stands down once `briefs/.session-ok` exists;
+`dispatch_stamp` and the SubagentStop hook also record each dispatch's start
+and return in `feedback/dispatches.jsonl` (wall-clock per dispatch, at no
+token cost — never time dispatches by hand);
 `read_guard` matches command positions only — heredoc bodies and quoted
 strings that merely contain a test command are not test runs.
 Merges record severity changes in `severity_history` (the Promoted column).
@@ -469,6 +488,10 @@ unmutated first and refuses a red baseline, refuses uncommitted changes to
 the manifest's files, honors a per-mutant `test_cmd`), `hygiene_check.sh <loop-dir>` (advisory
 git-hygiene report: tracked scratch, Finder-duplicate names, oversized
 tracked files, denylist-style ignores — run at Setup and before the report),
+`run_summary.py <loop-dir>` (the maintainer's run record; render_report
+calls it), `loop_usage.py --since <t>` (effective tokens per role from this
+repo's session transcripts — the measurement `/review-loop-tools:feedback`
+embeds; never re-derive it by hand),
 `panel_review.py probe|run|wait` (multi-provider panel lanes: probe auth,
 consent and precision at the gate; run lanes against a materialized diff —
 `--lanes a,b`, `--force`, `--detach` + `wait`; external models are FINDERS

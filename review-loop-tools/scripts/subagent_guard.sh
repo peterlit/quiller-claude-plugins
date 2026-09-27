@@ -7,8 +7,18 @@
 # (exit 2) so it fixes its own output, instead of costing the orchestrator a
 # full re-dispatch round-trip.
 set -euo pipefail
-cat >/dev/null 2>&1 || true   # drain stdin; the payload isn't needed
+input="$(cat 2>/dev/null || true)"
 dirs=("$@"); [ ${#dirs[@]} -eq 0 ] && dirs=(.review-loop .qa-loop)
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Record the return in feedback/dispatches.jsonl (the PreToolUse hook
+# recorded the start): wall-clock per dispatch for the run summary.
+# field_log.py records only while a loop phase is live and never fails.
+for d in "${dirs[@]}"; do
+  [ -f "$d/.phase" ] || continue
+  printf '%s' "$input" | python3 "$here/field_log.py" dispatch-end "$d" \
+    >/dev/null 2>&1 || true
+done
 
 # A subagent just finished. Decrement the LIVE-dispatch count kept by
 # dispatch_stamp.sh (briefs/.dispatched) and strip the ":dispatched" suffix

@@ -10,6 +10,11 @@ findings by severity, disputes, proposals, fix-review rejections, severity
 promotions, persona matrix, coverage gaps, closeout, resolutions. The one
 section that needs judgment, WATCH LIST, is emitted as candidate stubs with a
 "look here because:" slot the orchestrator fills in. Works for both loops.
+
+Also writes <loop-dir>/feedback/run-summary.json (run_summary.py): the
+objective record of what ran — plugin version, settings, verdicts, counts,
+anomalies, per-dispatch wall-clock — for the plugin maintainer. The REPORT
+is for the app's owner; the summary is never a section of it.
 """
 import glob, json, os, shlex, subprocess, sys
 
@@ -391,8 +396,21 @@ def main():
 
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(L))
+    # The run summary is best-effort: a report must never fail because the
+    # maintainer's telemetry could not be written.
+    summary_path = None
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import run_summary
+        summary_path = run_summary.write(loop, stop_note)
+    except Exception as e:
+        print(f"render_report: run summary not written ({type(e).__name__}: {e})",
+              file=sys.stderr)
     print(json.dumps({"report": out_path, "findings": len(findings),
-                      "watch_candidates": len(cands) + diff_cands}))
+                      "watch_candidates": len(cands) + diff_cands,
+                      "run_summary": summary_path}))
 
 if __name__ == "__main__":
     main()

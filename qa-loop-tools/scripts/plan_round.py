@@ -33,6 +33,18 @@ TAG_RE = re.compile(r"\[(novice|power|smoke|perf)\]")
 PATHS_RE = re.compile(r"^\s*paths\((WF-\d+[a-z]?)\)\s*:\s*(.+?)\s*$")
 WF_KEY_RE = re.compile(r"^WF-(\d+)([a-z]?)$")
 
+def note_anomaly(loop, code, detail):
+    """Telemetry for the run summary (feedback/anomalies.jsonl); never
+    raises, never changes what the plan prints or how it exits."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import field_log
+        field_log.anomaly(loop, code, detail, source="plan_round.py")
+    except Exception:
+        pass
+
 def wf_key(wf):
     """Sort key for WF-<n>[letter] — int() alone crashes on 'WF-9b'."""
     m = WF_KEY_RE.match(wf)
@@ -93,6 +105,9 @@ def main():
                         + ", ".join(unmapped_all))
     if not any(t["smoke"] for t in tcs):
         problems.append("no [smoke]-tagged test cases — targeted passes lose their regression floor")
+    for pr in problems:
+        # KIND only (the text before the colon): the rest names host workflows.
+        note_anomaly(loop, "plan-lint-problem", pr.split(":")[0].split(" — ")[0])
     if flags["--lint"]:
         print(json.dumps({"ok": not problems, "problems": problems, "tcs": len(tcs),
                           "workflows": len({t["wf"] for t in tcs}),
@@ -153,6 +168,9 @@ def main():
             selected = [t for t in tcs if t["smoke"] or t["tc"] in finding_tcs
                         or t["wf"] in finding_wfs]
             degenerated = True
+            note_anomaly(loop, "plan-degenerated",
+                         f"round {rnd}: diff touched >60% of test cases; reduced to "
+                         f"findings+smoke ({len(selected)} of {len(tcs)})")
             why += (f"; DEGENERATED: diff touched >60% of test cases — reduced to "
                     f"findings+smoke ({len(selected)}). Prefer per-workflow commits; "
                     f"--allow-wide overrides.")
@@ -273,6 +291,9 @@ def main():
                if placed.get(t["tc"], 0) == 0 and t["tc"] not in perf_tc_ids]
     doubled = sorted(tc for tc, n in placed.items() if n > 1)
     if orphans or doubled:
+        note_anomaly(loop, "plan-unchunked",
+                     f"round {rnd}: {len(orphans)} selected case(s) in no chunk, "
+                     f"{len(doubled)} in more than one")
         if orphans:
             print("plan_round: INTERNAL ERROR — selected test case(s) in NO "
                   "chunk: " + ", ".join(sorted(orphans)), file=sys.stderr)

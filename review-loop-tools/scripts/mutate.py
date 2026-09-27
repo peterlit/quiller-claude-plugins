@@ -34,6 +34,19 @@ Two guards make the kill count mean something (both measured in the field):
 """
 import json, os, shutil, subprocess, sys, tempfile
 
+def note_anomaly(root, code, detail):
+    """Telemetry for the run summary — only when a review loop lives in this
+    repo; never raises, never changes the exit path."""
+    try:
+        loop = os.path.join(root, ".review-loop")
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import field_log
+        field_log.anomaly(loop, code, detail, source="mutate.py")
+    except Exception:
+        pass
+
 def die(msg, code=1):
     print(f"mutate: {msg}", file=sys.stderr)
     sys.exit(code)
@@ -118,7 +131,12 @@ def main():
     st = subprocess.run(["git", "-C", root, "status", "--porcelain", "--"] + files,
                         capture_output=True, text=True)
     dirty = [l for l in st.stdout.splitlines() if l.strip()]
+    if dirty and allow_dirty:
+        note_anomaly(root, "mutate-allow-dirty",
+                     f"--allow-dirty over {len(dirty)} uncommitted manifest file(s)")
     if dirty and not allow_dirty:
+        note_anomaly(root, "mutate-dirty-refused",
+                     f"{len(dirty)} manifest file(s) had uncommitted changes")
         for l in dirty:
             print(f"mutate: DIRTY — {l}", file=sys.stderr)
         die("uncommitted changes to the manifest's files: the worktree is cut "
@@ -153,6 +171,8 @@ def main():
                 baselines[cmd] = "timeout"
                 tail = "timeout"
             if baselines[cmd] != 0:
+                note_anomaly(root, "mutate-baseline-red",
+                             f"a test_cmd exited {baselines[cmd]} on the unmutated tree")
                 print("=" * 60, file=sys.stderr)
                 print(f"mutate: BASELINE RED for test_cmd {cmd!r} (exit "
                       f"{baselines[cmd]}) — the unmutated tree does not pass "

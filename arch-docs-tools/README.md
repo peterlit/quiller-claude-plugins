@@ -58,3 +58,27 @@ The documenter uses `model: inherit` — deep code comprehension runs on
 whatever model you pick for the session (`/model`). There is no adversarial
 pairing here, so no pinned second model; if you want the docs themselves
 reviewed, run `/review-loop-tools:review-loop` on the docs commit.
+
+## Feedback for the maintainer
+
+```
+/arch-docs-tools:feedback
+/arch-docs-tools:feedback --quick
+```
+
+Files a field report about the PLUGIN — not about your code. The script
+gathers the objective half: the plugin version that actually ran (read from
+the running code, beside the installed-plugins entry), the verdicts and
+counts, the split, diagram, lint and coverage numbers,
+and effective tokens per role measured from this repo's session
+transcripts. The agent adds only what it observed: answers to the
+maintainer's watch questions ([FIELD-QUESTIONS.md](FIELD-QUESTIONS.md)),
+what to keep, defects with a repro and an evidence path, friction,
+decisions it took without you, and wishes. `--quick` files the numbers
+alone.
+
+The report is written to `docs/architecture/feedback/<plugin>-<version>-<date>.md`
+and copied to `~/.local/share/quiller/inbox/<repo name>/` on this machine
+(`$XDG_DATA_HOME` is honored). Nothing is sent anywhere. It contains counts,
+never finding text, file contents or commands.
+The run summary (`feedback/run-summary.json`) is written at the end of every run.
