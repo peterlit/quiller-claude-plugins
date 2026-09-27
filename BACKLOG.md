@@ -1,5 +1,77 @@
 # Backlog
 
+## Found by the documenters, 2026-09-27 (regeneration against 0.16.0 / 0.17.0 / 0.3.1)
+
+The documenters verify claims against the code and report what they find.
+None of the code items below has been through a proposal; each names how
+it was established. Verify before proposing.
+
+Fixed in review-loop-tools 0.16.1: `skeptical-reviewer.md` told the
+reviewer two things about long manifests (0.16.0's A5 replaced the
+matching paragraph in `implementer.md` and missed the reviewer's).
+
+Code, reported as reproduced by running the scripts:
+
+- **`union_evidence()` returns `{}` for list-shaped evidence**, so a merge
+  that touches a review finding wipes its `file:line` evidence list. 18 of
+  27 findings in this repo's own ledger have empty evidence. The qa loop's
+  evidence is dict-shaped and unaffected.
+- **`commit_guard.sh` without `jq` fails open on the staging rules and
+  CLOSED on everything else**: the env-knob checks (`REVIEW_LOOP_TEST_CMD`,
+  `REVIEW_LOOP_MAX_DIFF`) run on every shell call because the command is
+  unreadable, and they are not gated on a live loop. A plain `ls` ran the
+  test command and was blocked.
+- **`subagent_guard.sh` decrements the live count before it validates.** If
+  the host re-fires SubagentStop after a block (an inference), a refused
+  fragment costs two counts — more likely with qa's parallel testers.
+- **`mermaid_lint.py` gaps**: quoted `actor` aliases, semicolons in
+  `loop`/`alt`/`opt` labels and unquoted diamond labels are not flagged; a
+  cylinder node `[(Database)]` is a false positive.
+- **`feedback.py` and `arch_summary.py` fall back to different repo roots
+  outside git.** `feedback.py` takes the parent of the given directory, so
+  for `docs/architecture` the host becomes `docs`.
+
+Code, established by reading only:
+
+- **A detached panel run that exits early never writes its summary**, so
+  `panel_review.py wait` exits 3 indefinitely. `mutate.py` had the same
+  flaw and 0.16.0 fixed it there.
+- **The session-size gate runs only on a bare-phase dispatch**; a first
+  dispatch under `:waiting:` or `:dispatched` is never gated.
+- **`QA_LOOP_UNATTENDED` records nothing in the qa loop.** Only
+  `next-round` writes the rounds.md note, and the qa skill never calls
+  `next-round` (nor are `round_end_shas` written). The qa skill and
+  CONTROLS both promise the record.
+- **Ingest cannot show an arch-docs report's numbers.** The digest reads
+  keys the arch-docs summary lacks (rounds, stop, reported usage); its
+  `objective` block is never printed.
+- **Ingest drops items from a report whose version is `unknown`**: the id
+  pattern requires a numeric version.
+- **Seven settled-decision ids have no ingest pattern**
+  (`s-simulator-discipline` and all six arch-docs ids).
+- **Feedback measures no tokens when the session was started from a path
+  other than the repo root** (the transcript directory is derived from
+  the git top-level; there is no override through `feedback.py`).
+- **`mutate.py` hard-codes `.review-loop`** for its telemetry.
+
+Tests and documentation:
+
+- **No automated byte-identity check for the mirrored scripts.** Only
+  `CONTROLS.md` has one (in `panel_selftest.py`); hook and script identity
+  rests on a manual `cmp`.
+- **The arch-docs feedback path and every qa-only script, and the driver,
+  have no automated test.**
+- **`qa-loop-tools/README.md` is stale in seven places** (listed in section
+  6.5 of `docs/architecture/qa-loop-tools.md`); `review-loop-tools/README.md`
+  in two.
+- **HANDOFF section 3's fourteen settled decisions carry no ids**, while
+  the three FIELD-QUESTIONS files carry `s-*` ids for theirs.
+- **`docs/proposal-multi-provider-review-panel.md` still reads "awaiting
+  commit approval"**; it shipped as 0.11.0.
+- **The feedback path has not yet carried a real report.** The drop does
+  not exist on this machine; the one report in `docs/inbox/weatherapp/`
+  predates the command.
+
 ## From the agent-feedback process build (review 0.15.0 / qa 0.16.0 / arch-docs 0.3.0)
 
 - **SessionStart duplicate scan** (declined as C6 in
@@ -22,9 +94,6 @@
   `!**/feedback/*.jsonl`, `!**/feedback/*.md` to
   `cardgame/.review-loop/.gitignore`. weatherapp's is plugin-managed
   (v0.12.0) and upgrades itself on the first report.
-- **Regenerate `docs/architecture/`.** The docs cite line numbers and
-  predate six new scripts and a new skill per plugin; re-dispatch the
-  documenters (`/arch-docs-tools:arch-docs`), do not hand-edit.
 - **arch-docs coverage and survey disagree on what a source file is.**
   `repo_survey.py` counts `.sh`, `.sql`, `.css`, `.html` and `.h`;
   `coverage_check.py` counts none of them, and neither counts `.md` — so a

@@ -138,11 +138,10 @@ findings.
 Device verification without a simulator control tool loaded: a scoped
 XCUITest you run for the round's touched screens is an acceptable — often
 better — check than a driven tap plus screenshot, and it doubles as the
-regression test; say which you did. If the whole manifest cannot finish inside the 10-minute
-command ceiling, split it into parts whose rows are VERBATIM copies and run
-each part in the foreground — never rewrite mutants, never background the
-run; the kill counts sum. (`"replacement": ""` is a valid mutant: it
-deletes the matched line.)
+regression test; say which you did. Never rewrite an implementer's mutants,
+and never copy or split its manifest: a long one runs detached, a few
+mutants re-run with `--only` (both above). (`"replacement": ""` is a valid
+mutant: it deletes the matched line.)
 
 Collateral-damage sweep: the CHANGES block lists touched_files. Grep the
 test tree for test classes referencing the types defined in those files and
