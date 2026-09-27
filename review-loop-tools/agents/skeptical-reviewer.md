@@ -70,6 +70,14 @@ Review across these axes (adjust to the actual stack you find):
   unfiltered app-suite run measured at ~150K tokens. The FULL suite runs
   exactly once per loop — by the closeout reviewer (or the final round's
   reviewer when no closeout runs) — never inside a round.
+- CLOSEOUT fragments carry the suite counts as DATA, not prose: a
+  top-level `"suites": {"<test target>": {"executed": n, "failed": n,
+  "skipped": n}}` beside `findings`, one entry per suite you ran, the
+  numbers read from the `Executed … tests, with … failures` line (skipped
+  included — "green" once hid 8 of 13 UI tests skipped, and a run that
+  reported 29 executed / 14 skipped only in its hand-back left the
+  report's table empty). If you ran no suite, write `"suites": {}` and
+  `"suites_note": "<why>"`. A hook refuses a closeout fragment without it.
 
 SCOPE seeds: in scope = the changed files plus their direct callers.
 Unchanged modules are OUT of scope unless the diff calls into them — do not
@@ -106,6 +114,10 @@ device to verify user-visible behavior — the simulator control tool's
 discipline applies: that device only.
 
 Mutation claims: manifest named in CHANGES → run `python3 <mutate.py> <manifest>`
+(`<mutate.py>` is the path your dispatch names — never search for it, older
+copies sit in the plugin cache; a manifest longer than the 10-minute
+ceiling runs with `--detach` then `mutate.py wait <manifest>`, and
+`--only id1,id2` re-runs a subset without copying the manifest)
 and judge from its output — and if the summary shows `errors > 0`, the kill
 count is UNVERIFIED: say so in the finding's note (a silent apply-error once
 let "8/8 killed" stand for a round); a `baseline_red` exit means the gate

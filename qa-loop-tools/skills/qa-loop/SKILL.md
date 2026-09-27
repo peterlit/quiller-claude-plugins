@@ -48,6 +48,15 @@ subagents. You are PLUMBING ONLY.
   without the suffix is a stall, not a wait.
   For waits that are not a subagent, use `…:waiting:<reason>` (see
   Waiting, failures, and pauses).
+  Write the phase in its OWN call, BEFORE the dispatch — never in the same
+  batch of tool calls as an Agent call: the dispatch hook reads the marker
+  the instant the call is issued, and a same-batch write lands after it
+  (measured in the review loop: an implementer dispatched beside its own
+  phase write went unmarked for nine minutes). The count in
+  `briefs/.dispatched` is the source of truth — every dispatch made while
+  a phase is live is counted, under `:waiting:` too, the Stop hook reads
+  the count, and `set-round` resets a count left above zero at the round
+  boundary — so the suffix is a display you never repair by hand.
 - All loop state lives in the TARGET REPO at `.qa-loop/`. Never write it into
   the plugin directory.
 - Conclusions in git, evidence and scratch on disk — the loop-dir `.gitignore`
@@ -122,7 +131,11 @@ booted device", which in a shared-Mac session can be another loop's
 simulator (measured).
 
 ## Stage 1 — Workflows (once; the ONLY blocking human gate)
-0. If `.qa-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
+0. If `.qa-loop/` holds a PAUSED loop — `.phase` ends `:waiting:<reason>`,
+   usually beside a note in `briefs/` — RESUME it (see Interrupting and
+   resuming); do not archive. `awaiting-human` at the Stage 1 gate is a
+   pause too: re-ask.
+   If `.qa-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
    `.phase` says done) — or an ABANDONED one (a stale `.phase` or ledger
    left by a previous session; confirm with the human if unsure) — archive
    it first:
@@ -142,7 +155,10 @@ simulator (measured).
 1. If `.qa-loop/ledger.json` doesn't exist, create it with:
    `{ "round": 0, "build_sha": null, "max_rounds": 5, "parallel_testers": 1, "emit_regression_tests": false, "regression_test_arming": "guard", "token_budget": null, "implemented_rounds": [], "findings": [] }`
    (token_budget: a hard ceiling on cumulative subagent tokens — record each
-   dispatch's cost from the task result — `set-usage` REPLACES a
+   dispatch's cost from the task result, which can arrive a turn AFTER the
+   agent's hand-back; both verbs also correct the round's row in rounds.md
+   and verdict.json, and print `over_budget` — when true, stop and report
+   now — `set-usage` REPLACES a
    (round, role) figure, `add-usage` accumulates; use unique per-dispatch
    roles like tester-wf2-1 with set-usage, or add-usage for a shared role.
    The BUDGET stop fires when the sum crosses the budget; null disables.)
@@ -153,8 +169,12 @@ simulator (measured).
    (advisory, always exits 0) — and act on every line it prints:
    `git rm --cached` tracked scratch (NEVER delete from disk); when a
    Finder-duplicate name (`ledger 2.json`, `fragments 2/`) exists and the
-   plain name is missing, the duplicate IS the real file — `mv` it back, and
-   never write to a space-suffixed name. On the `.gitignore` itself: if it
+   plain name is missing, the duplicate IS the real file — re-run the check
+   with `--restore`, which moves back every duplicate that is the only one
+   of its name (never overwrites, never deletes) and leaves the ambiguous
+   ones for you; never write to a space-suffixed name. A `tracked file
+   missing` line is a conclusion that vanished under some other name:
+   compare the candidate it names, then `mv` it back. On the `.gitignore` itself: if it
    is missing, the plugin's own old five-line denylist (`evidence/`,
    `fragments/`, `briefs/`, `scratch/`, `.phase`), or an earlier "Managed by
    qa-loop-tools" allowlist, write exactly this default-closed allowlist;

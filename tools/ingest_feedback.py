@@ -71,7 +71,10 @@ SETTLED = {
     "s-mutations-through-scripts": r"hand-?edit",
     "s-do-not-cut": r"(cut|reduce|skip|fewer).*(thinking|screenshots?|verification)",
     "s-lane-failures-soft": r"(non-?zero|exit code|exit status).*lane|lane.*(non-?zero|exit code)",
-    "s-dispatch-counter": r"(marker|:dispatched).*(agent name|keyed|per-agent)",
+    "s-dispatch-counter": r"(marker|:dispatched|counter).*(agent name|keyed|per-agent|expire|PostToolUse)",
+    "s-usage-never-rewrites-decision": r"(set-usage|add-usage|late usage).*(decision|verdict)",
+    "s-no-cache-pruning": r"(prune|delete|clean).*(cache|stale version|old version)",
+    "s-no-archive-guarantee": r"(archive|conclusion).*(renam|duplicate|iCloud|Dropbox)",
 }
 
 def drop_root():

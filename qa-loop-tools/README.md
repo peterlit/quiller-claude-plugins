@@ -144,8 +144,11 @@ conclusions stay in git), while evidence, fragments, briefs, scratch, and
 anything unanticipated (a Finder-duplicated `fragments 2/`, a stray `.pyc`)
 never enter the index. Staging is by explicit file path — a hook blocks
 `git add -A`/`.`/`-f`/directory adds while a loop is live — and a hygiene
-check at setup and report time flags tracked scratch, duplicate names, and
-oversized files.
+check at setup and report time flags tracked scratch, duplicate names,
+oversized files, and tracked files missing from disk. After a sync outage
+or a sync toggle, `hygiene_check.sh .qa-loop --restore` moves back every
+` 2`-style duplicate that is the only one of its name; it never overwrites
+or deletes.
 Interrupting a round is always safe — durable state is the ledger,
 merged fragments, coverage, and docs, and the deterministic reset makes
 restarting the round free.

@@ -161,12 +161,19 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   single string and separate words both work; excluded-but-changed paths
   are listed in an `EXCLUDED` trailer of the `.stat` and in
   `briefs/round-N.files`; a failed git leaves no partial files); `set-usage`
-  records token cost; `next-round <loop-dir> <N> [--fragment F] [--usage
+  records token cost — and, with `add-usage`, carries the round's settled
+  figure into `rounds.md` and `verdict.json` and prints `over_budget`, so
+  a figure recorded after `next-round` (a dispatch's token count can
+  arrive a turn after its hand-back) reaches the report and the budget at
+  once instead of a round late; `next-round <loop-dir> <N> [--fragment F] [--usage
   role=tokens …]` folds merge + metrics + usage + advance into one
   orchestrator turn and records the round's END sha, so the report's
   watch list ends each round at its own commit and lists the closeout
   commit separately; `open <ledger> wontfix` `[review]` extracts the
-  accepted-disagreement set for the final-pass verifier. Archives are named by the ARCHIVED
+  accepted-disagreement set for the final-pass verifier; every `open` and
+  `next-round` brief carries a `tools` block with the absolute paths of
+  THIS release's agent-facing scripts, so no agent searches the plugin
+  cache for one. Archives are named by the ARCHIVED
   loop's scope sha, so old loops are findable without opening each one. An
   open blocker merged in review scope mode auto-escalates max_rounds 2→5.
   *In practice:* a finding's live status is `current_status` — a top-level
@@ -182,14 +189,29 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   (an agent is running; stripped automatically when it returns), and
   `…:waiting:<reason>` (the orchestrator is waiting on something that isn't
   a subagent — a 529 backoff, a background task, you; the hooks leave it
-  alone). The hooks COUNT live dispatches in `briefs/.dispatched`: two
+  alone). The hooks COUNT live dispatches in `briefs/.dispatched`, and
+  the count — not the suffix — is what the Stop hook reads: every dispatch
+  made while a phase is live is counted, under `:waiting:` too, so two
   agents running at once (a panel-verifier beside the closeout
-  implementer) no longer unmark each other — `:dispatched` is stripped
-  when the last one returns. Each plugin's hooks guard only their own loop
-  directory.
-  *In practice:* escape hatch — if a dead session leaves the guard armed,
-  write `done` into it and the guard stands down (and delete
-  `briefs/.dispatched` if a crashed dispatch left the count high).
+  implementer) cannot unmark each other and a phase write cannot make a
+  running agent look absent (measured: a closeout implementer dispatched
+  under `:waiting:panel-final`, in the same batch as its own phase write,
+  went uncounted and the Stop hook blocked a turn nine minutes before it
+  returned). `:dispatched` is stripped when the last agent returns.
+  `set-round` and `next-round` reset a count left above zero at the round
+  boundary and record it (`dispatch-count-mismatch`). Each plugin's hooks
+  guard only their own loop directory.
+  *In practice:* write the phase in its own call before a dispatch, never
+  in the same batch. Escape hatch — if a dead session leaves the guard
+  armed, write `done` into the marker and the guard stands down. A count
+  left high by a crashed agent makes the guard fail OPEN (it allows stops)
+  until the next round boundary; delete `briefs/.dispatched` to clear it
+  sooner.
+- **Pausing and resuming** `[both]` — a loop whose marker ends
+  `:waiting:<reason>` (or reads `awaiting-human`) is PAUSED, not finished
+  and not abandoned: the next session resumes from the step the marker
+  names and does not archive. The session-size gate produces this state
+  when it sends a loop to a fresh session.
 - **`thrashing_soft` remembers being answered** `[both]` — after a human
   approves a continuation the orchestrator records it (`consulted` verb);
   the next thrashing signal is hard automatically, and at max_rounds the
@@ -232,7 +254,11 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   wait for closeout. The closeout's verify_cmd must run every test target
   its diff touches (a build is not a test), and an introduced_by_fix
   BLOCKER there earns one extra scoped fix dispatch — otherwise the report
-  headline is "done-but-red", never a buried open row.
+  headline is "done-but-red", never a buried open row. The closeout
+  reviewer's fragment carries the suite counts as data (`suites`: target →
+  executed / failed / skipped) and a hook refuses one without them; the
+  report's Closeout section renders the table, or says the counts were
+  not reported.
   *In practice:* nothing to set; `open --severity major` includes fix_risk
   minors automatically.
 - **Read guard** `[both]` — while a loop phase is in flight, a `PreToolUse`
@@ -263,7 +289,14 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   mutant killed — refuses uncommitted changes to the manifest's files
   unless `--allow-dirty` — a pre-commit run once reported every mutant
   survived against the old code — and honors a per-mutant `test_cmd` so
-  UI-only mutants alone pay the UI suite). `[qa]` `plan_round.py` selects the targeted set and emits
+  UI-only mutants alone pay the UI suite). `--only id1,id2` runs a subset
+  of the named manifest with no scratch copy; `--detach` then
+  `mutate.py wait <manifest>` runs a manifest longer than the 10-minute
+  command ceiling (exit 3 = still running, call `wait` again; results
+  accumulate in `<manifest>.results.json`); every result carries
+  `elapsed_s`. A copy refuses to run when a HIGHER version of the plugin
+  is installed beside it (`--allow-stale` overrides) — two implementers
+  once searched for the script and ran a release-old copy. `[qa]` `plan_round.py` selects the targeted set and emits
   chunk manifests (≤5 cases, ≥3 after tiny-chunk coalescing — each dispatch
   pays ~40-60K fixed cost) from `paths(WF-n)` lines in WORKFLOWS.md and
   `TC-x.y [persona] [smoke] [perf]` lines in TESTCASES.md — workflow ids
@@ -277,8 +310,16 @@ where it lives — and what to actually do with it. Tags: `[qa]` `[review]`
   turns sampler output plus the tester's `marks.jsonl` windows into numbers
   and candidate findings. `[both]` `hygiene_check.sh <loop-dir>` reports
   git-hygiene violations in the loop dir (tracked scratch, Finder-duplicate
-  names, >256KB tracked files, denylist-style ignores) — advisory, run at
-  setup and again before the report.
+  names, >256KB tracked files, denylist-style ignores, tracked files
+  missing from disk) — advisory, run at setup and again before the report.
+  `--restore` moves back every ` 2`-style duplicate whose plain name is
+  missing and which is the only duplicate of that name; it never
+  overwrites, never deletes, and leaves anything ambiguous alone. The
+  archive's settle pass covers renames that follow a move by seconds.
+  After a sync outage, a sync toggle, or a restore from backup, run
+  `hygiene_check.sh <loop-dir> --restore` once per repo (measured: one
+  accidental iCloud Drive off/on renamed 40 files across a source tree,
+  committed archive conclusions among them, found a day later).
   *In practice:* you don't run these yourself — they are why the loops got
   cheaper. The two obligations they create: every workflow needs a
   `paths(WF-n): …` line (the orchestrator writes it at Stage 1), and every
@@ -552,7 +593,8 @@ separate readers, and filing feedback is always an invitation, never a gate.
   documented path. Scripts and hooks record their own: `lane-error`,
   `lane-timeout`, `lane-skipped`, `lane-cached`, `lane-capped`,
   `lane-disabled-by-precision` `[review]`; `mutate-baseline-red`,
-  `mutate-dirty-refused`, `mutate-allow-dirty` `[review]`;
+  `mutate-dirty-refused`, `mutate-allow-dirty`, `mutate-stale-refused`
+  `[review]`;
   `plan-lint-problem`, `plan-degenerated`, `plan-unchunked`,
   `notes-over-ceiling` `[qa]`; `dispatch-count-mismatch`,
   `session-gate-blocked`, `read-guard-denied`, `commit-guard-denied`,

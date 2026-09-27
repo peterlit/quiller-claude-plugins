@@ -24,6 +24,10 @@ round number, a count.
 - **w-minors-only-dispatch** — Under `full_pass_required`, was the minors-only implementer dispatch used for anything but minors?
 - **w-fix-review-rejections** — How many fixes did the fix-reviewer reject as unsound or harmful, and did a tester later overturn any of its verdicts on-device?
 - **w-degenerated-targeting** — Did a targeted pass degenerate to findings+smoke (`degenerated: true` in the plan), and was `--allow-wide` needed?
+- **w-dispatch-under-waiting** — Did you dispatch an agent while the phase said `:waiting:`, and did `briefs/.dispatched` count it? With parallel testers, did the Stop hook ever block a turn while one was still running?
+- **w-counter-reset** — Did `set-round` record `dispatch-count-mismatch` and reset a count left above zero at a round boundary?
+- **w-late-usage** — Did a dispatch's token count arrive after its hand-back, and after the late `set-usage` do `rounds.md`, `verdict.json` and the report header show ONE figure for the round? Did `over_budget` ever come back true?
+- **w-hygiene-restore** — Did hygiene report a `tracked file missing`, and did `--restore` move back a duplicate — correctly, and only the unambiguous ones?
 - **w-run-summary** — Did the report stage write `feedback/run-summary.json` without being asked, and does its `plugin.version` match what you believe ran?
 - **w-dispatch-timing** — Does the summary's `dispatches` section account for every dispatch you made, including parallel testers (`unreturned` and `unmatched_returns` both 0)?
 - **w-anomaly-verb** — Did you record a workaround with `merge_ledger.py anomaly` at the moment it happened (a hand-built chunk, an abandoned provisioner), and did any script-recorded anomaly surprise you?
@@ -47,6 +51,9 @@ decision's id.
 - **s-degeneration-guard** — A targeted pass whose diff touches more than 60% of test cases falls back to findings+smoke. `--allow-wide` is the escape hatch; per-workflow commits are the fix.
 - **s-mutations-through-scripts** — Every ledger, report and planning mutation goes through the scripts. An orchestrator hand-editing `ledger.json` or `rounds.md` is a skill-wording bug to report, not a shortcut to bless.
 - **s-do-not-cut** — Tester exploration, screenshots and extended thinking are not cost levers: cost is turns x context, and cache reads are 98-99% of raw tokens.
+- **s-dispatch-counter** — The live-dispatch COUNT in `briefs/.dispatched` is the source of truth and `:dispatched` is its display: every dispatch in a live phase is counted, the Stop hook reads the count, and a count stuck above zero fails open until `set-round` resets it. Expiring the count by age was declined.
+- **s-usage-never-rewrites-decision** — `set-usage` and `add-usage` correct the token figures in `rounds.md` and `verdict.json` and print `over_budget`; they never rewrite a round's stop decision. The orchestrator acts on the flag.
+- **s-no-archive-guarantee** — The plugin cannot stop a file provider renaming files. `archive` re-checks after a settle, hygiene detects, `--restore` repairs; a days-later rename is a machine event (a sync outage or toggle) until shown otherwise.
 - **s-simulator-discipline** — Named per-repo worker devices, per-chunk resets, and stop-and-report on a vanished device stay as they are: several loop sessions share one Mac.
 
 ## Open and recently shipped items

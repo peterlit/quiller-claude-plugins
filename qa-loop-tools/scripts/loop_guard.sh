@@ -7,6 +7,13 @@
 # that is not a subagent (":waiting:<reason>", cleared only by the
 # orchestrator). Pass loop dirs as arguments so each plugin guards only its
 # own loop (default: both). Zero-cost no-op when no loop is running.
+# The live-dispatch COUNT (briefs/.dispatched) outranks the suffix: a bare
+# "round…" phase with a count above zero means an agent is running and the
+# suffix was overwritten by a phase write — a legitimate wait (measured: the
+# guard blocked a turn while the closeout implementer was nine minutes from
+# returning). A count stuck above zero by a crashed agent fails OPEN, as a
+# stuck suffix always did; set-round and next-round reset it at round
+# boundaries.
 set -euo pipefail
 dirs=("$@"); [ ${#dirs[@]} -eq 0 ] && dirs=(.review-loop .qa-loop)
 
@@ -37,6 +44,10 @@ for d in "${dirs[@]}"; do
         # still caught.
         ;;
       round*|seed*)
+        n="$(tr -dc '0-9' < "$d/briefs/.dispatched" 2>/dev/null || true)"
+        if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+          continue
+        fi
         echo "loop_guard: $d round in flight (phase: $phase). If you have NOT yet dispatched this phase's subagent, do so now — do not end the turn on a promise. If a subagent you already dispatched is still running in the background, do NOT dispatch a duplicate: say you are waiting for it and stop (the session resumes when it completes). If the loop is genuinely finished or waiting on the human, first update $d/.phase to 'done' or 'awaiting-human'." >&2
         exit 2
         ;;

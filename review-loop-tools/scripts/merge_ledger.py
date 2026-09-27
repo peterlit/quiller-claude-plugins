@@ -93,6 +93,41 @@ def anomaly(args):
     print(json.dumps({"recorded": row["code"], "detail": row["detail"],
                       "file": os.path.join(loop, "feedback", "anomalies.jsonl")}))
 
+def settle_dispatch_counter(loop, rnd):
+    """A round boundary: every agent the last round dispatched has returned,
+    so the live-dispatch counter must read 0. Non-zero means a return was
+    never counted (a crashed agent, a hook that did not fire): record it,
+    then RESET it — the Stop hook reads this count, and a stale one makes
+    the stall guard wave every stop through."""
+    cpath = os.path.join(loop, "briefs", ".dispatched")
+    try:
+        with open(cpath) as fh:
+            live = int((fh.read() or "0").strip() or 0)
+    except (OSError, ValueError):
+        return 0
+    if live > 0:
+        note_anomaly(loop, "dispatch-count-mismatch",
+                     f"briefs/.dispatched read {live} at the round {rnd} boundary; reset to 0")
+        try:
+            with open(cpath, "w") as fh:
+                fh.write("0\n")
+        except OSError:
+            pass
+    return live
+
+def shipped_tools():
+    """Absolute paths of THIS release's agent-facing scripts, for briefs.
+    Agents that resolved a script themselves found older copies in the
+    plugin cache (measured: two implementers ran the 0.13.0 mutate.py under
+    0.14.0 — no baseline run, per-mutant test_cmd ignored). A brief is
+    scratch, never committed, so an absolute path is safe here."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    out = {}
+    for key, name in (("mutate", "mutate.py"), ("nfr_analyze", "nfr_analyze.py")):
+        if os.path.exists(os.path.join(here, name)):
+            out[key] = os.path.join(here, name)
+    return out
+
 def resolve(args):
     if len(args) < 4:
         print("usage: merge_ledger.py resolve <ledger.json> <finding-id> "
@@ -160,6 +195,7 @@ def set_round(args):
     sha = args[2] if len(args) > 2 else None
     with open(path) as fh:
         ledger = json.load(fh)
+    settle_dispatch_counter(os.path.dirname(os.path.abspath(path)), rnd)
     ledger["round"] = rnd
     out = {"round": rnd}
     if sha:
@@ -246,7 +282,12 @@ def open_findings(args):
                        for x in regions):
                 continue
         sel.append({k: v for k, v in f.items() if k != "status_history"})
-    print(json.dumps({"findings": sel}, indent=2))
+    out = {"findings": sel}
+    tools = shipped_tools()
+    if tools:
+        # "tools": run THESE paths; never search the plugin cache for a script.
+        out["tools"] = tools
+    print(json.dumps(out, indent=2))
 
 def split_range(args):
     """ONE parser for `scope` and `diff`: the range plus optional pathspecs,
@@ -304,12 +345,84 @@ def _usage(args, verb, accumulate):
         json.dump(ledger, fh, indent=2)
         fh.write("\n")
     total = sum(sum(v.values()) for v in ledger["usage"].values())
+    synced = sync_round_tokens(os.path.dirname(os.path.abspath(path)),
+                               int(rnd), ledger["usage"])
+    budget = ledger.get("token_budget")
+    try:
+        over = bool(budget) and total >= int(budget)
+    except (TypeError, ValueError):
+        over = False
     if not getattr(set_usage, "quiet", False):
         # round_total_tokens: the ROUND's sum across roles, not this call's
         # figure (the old name "round_tokens" read as per-role next to a
         # per-role call and got misread in the field).
+        # over_budget: a figure recorded AFTER next-round is invisible to
+        # the metrics that already ran — when it crosses token_budget, act
+        # on it now (BUDGET: stop, closeout, report), not a round later.
         print(json.dumps({"round": int(rnd), "role": role, "round_total_tokens": sum(bucket.values()),
-                          "cumulative": total, "token_budget": ledger.get("token_budget")}))
+                          "cumulative": total, "token_budget": budget,
+                          "over_budget": over, **synced}))
+
+def sync_round_tokens(loop, rnd, usage):
+    """Carry a round's settled token figure into rounds.md and verdict.json.
+    A dispatch's hand-back can arrive before the notification carrying its
+    token count, so usage is often recorded AFTER next-round ran metrics —
+    and the trend row and verdict kept the earlier figure (measured: a
+    report whose trend table showed implementer-only tokens, 317,856
+    cumulative against 599,948 in the ledger). Never touches a Decision:
+    that is the metrics script's."""
+    import re as _re
+    out = {"rounds_md_updated": False, "verdict_updated": False}
+    def digits(d):
+        return sum(v for v in d.values()
+                   if isinstance(v, (int, float)) and not isinstance(v, bool))
+    round_total = digits(usage.get(str(rnd)) or {})
+    rmd = os.path.join(loop, "rounds.md")
+    try:
+        with open(rmd, encoding="utf-8") as fh:
+            lines = fh.read().split("\n")
+        col = None
+        for i, line in enumerate(lines):
+            if not line.startswith("|"):
+                continue
+            cells = line.strip().strip("|").split("|")
+            if col is None:
+                names = [c.strip().lower() for c in cells]
+                if "tokens" not in names or "round" not in names:
+                    break
+                col, rcol = names.index("tokens"), names.index("round")
+                continue
+            if len(cells) > max(col, rcol) and cells[rcol].strip() == str(rnd):
+                if cells[col].strip() != str(round_total):
+                    cells[col] = f" {round_total} "
+                    lines[i] = "|" + "|".join(cells) + "|"
+                    with open(rmd, "w", encoding="utf-8") as fh:
+                        fh.write("\n".join(lines))
+                    out["rounds_md_updated"] = True
+                break
+    except OSError:
+        pass
+    vpath = os.path.join(loop, "verdict.json")
+    try:
+        with open(vpath, encoding="utf-8") as fh:
+            verdict = json.load(fh)
+        vr = verdict.get("round")
+        if isinstance(vr, int) and not isinstance(vr, bool) and vr >= rnd:
+            new = dict(verdict)
+            if vr == rnd and "tokens" in verdict:
+                new["tokens"] = round_total
+            if "cumulative_tokens" in verdict:
+                new["cumulative_tokens"] = sum(
+                    digits(v) for k, v in usage.items()
+                    if str(k).isdigit() and int(k) <= vr and isinstance(v, dict))
+            if new != verdict:
+                with open(vpath, "w", encoding="utf-8") as fh:
+                    json.dump(new, fh, indent=2)
+                    fh.write("\n")
+                out["verdict_updated"] = True
+    except (OSError, ValueError):
+        pass
+    return out
 
 def set_usage(args):
     _usage(args, "set-usage", accumulate=False)
@@ -500,17 +613,7 @@ def next_round(args):
             i += 1
     ledger_path = os.path.join(loop, "ledger.json")
     here = os.path.dirname(os.path.abspath(__file__))
-    # A round is closing: every agent it dispatched has returned, so the
-    # live-dispatch counter must read 0. Non-zero means a return was never
-    # counted (a crashed agent, a hook that did not fire) — telemetry only.
-    try:
-        with open(os.path.join(loop, "briefs", ".dispatched")) as fh:
-            live = int((fh.read() or "0").strip() or 0)
-    except (OSError, ValueError):
-        live = 0
-    if live > 0:
-        note_anomaly(loop, "dispatch-count-mismatch",
-                     f"briefs/.dispatched read {live} when round {rnd} closed")
+    settle_dispatch_counter(loop, rnd)
     is_qa = os.path.basename(os.path.abspath(loop)) == ".qa-loop" or os.path.exists(os.path.join(here, "qa_metrics.py")) and not os.path.exists(os.path.join(here, "metrics.py"))
     out = {"round": rnd}
     # Record where this round's change ENDS (HEAD now: the reviewer never

@@ -48,6 +48,7 @@ CODES = {
     "mutate-baseline-red": "mutate.py refused: a test_cmd is red on the unmutated tree",
     "mutate-dirty-refused": "mutate.py refused: uncommitted changes to the manifest's files",
     "mutate-allow-dirty": "mutate.py ran with --allow-dirty over uncommitted changes",
+    "mutate-stale-refused": "mutate.py refused: a newer version of the plugin is installed beside it",
     "notes-over-ceiling": "HARNESS_NOTES.md is still over its byte ceiling after rotation",
     "plan-lint-problem": "plan_round's contract lint reported a problem",
     "plan-degenerated": "a targeted pass degenerated to findings+smoke",

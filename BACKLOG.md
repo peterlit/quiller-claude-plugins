@@ -2,9 +2,26 @@
 
 ## From the agent-feedback process build (review 0.15.0 / qa 0.16.0 / arch-docs 0.3.0)
 
-- **Six defects reported against review-loop-tools 0.14.0 await a proposal**
-  (`rl-0.14.0-20260920-weatherapp-0..5`, `new` in
-  `docs/inbox/dispositions.json`). Not touched by the feedback build.
+- **SessionStart duplicate scan** (declined as C6 in
+  `docs/proposal-2026-09-27-weatherapp-0.14.0-report.md`). Comes back only
+  if days-later renames are reported WITHOUT a machine event behind them;
+  the one report so far traced to an accidental iCloud Drive off/on.
+- **Hook ordering inside one batch of tool calls is unverified.** 0.16.0
+  no longer depends on it (both orders are tested), but whether the
+  dispatch hook runs before or after a same-batch Bash call, and whether a
+  hand-back reliably precedes its token notification, are each known from
+  one field run. Worth a watch-item answer before anything else is built
+  on either.
+- **`suites_note` is free text.** A closeout reviewer can satisfy the guard
+  with `"suites": {}` and any note. If empty-with-note shows up on repos
+  that plainly have test targets, tighten it.
+- **cardgame's loop-dir `.gitignore` is host-owned** (its first line lacks
+  "Managed by"), so the feedback command will not add the `feedback/`
+  rules there and reports filed in that repo are not versioned — the drop
+  copy is the delivery. Host-side fix: add `!**/feedback/*.json`,
+  `!**/feedback/*.jsonl`, `!**/feedback/*.md` to
+  `cardgame/.review-loop/.gitignore`. weatherapp's is plugin-managed
+  (v0.12.0) and upgrades itself on the first report.
 - **Regenerate `docs/architecture/`.** The docs cite line numbers and
   predate six new scripts and a new skill per plugin; re-dispatch the
   documenters (`/arch-docs-tools:arch-docs`), do not hand-edit.

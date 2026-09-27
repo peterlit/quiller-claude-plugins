@@ -797,10 +797,10 @@
    "source": "docs/inbox/weatherapp/review-loop-tools-0.14.0-2026-09-20.md",
    "title": "iCloud renamed committed archive conclusions to ' 2' names days after the archive; hygiene does not scan archive/ for a missing plain name",
    "section": "Defects",
-   "status": "new",
-   "version": "",
-   "ref": "",
-   "reason": ""
+   "status": "shipped",
+   "version": "0.16.0",
+   "ref": "proposal-2026-09-27 A6, C5, C6",
+   "reason": "Detection by a second route (tracked files missing from disk) and a `--restore` repair verb shipped; no guarantee that archived conclusions stay put (C5). The reported rename was traced to an accidental iCloud Drive off/on on 2026-09-25, not routine re-stamping; hygiene already scanned archive/. The SessionStart scan was dropped (C6)."
   },
   {
    "id": "rl-0.14.0-20260920-weatherapp-1",
@@ -810,9 +810,9 @@
    "source": "docs/inbox/weatherapp/review-loop-tools-0.14.0-2026-09-20.md",
    "title": "briefs/.dispatched read 0 with an agent live after a phase write and an Agent dispatch in one parallel batch; mark then stripped",
    "section": "Defects",
-   "status": "new",
-   "version": "",
-   "ref": "",
+   "status": "shipped",
+   "version": "0.16.0",
+   "ref": "proposal-2026-09-27 A1, C3",
    "reason": ""
   },
   {
@@ -823,9 +823,9 @@
    "source": "docs/inbox/weatherapp/review-loop-tools-0.14.0-2026-09-20.md",
    "title": "rounds.md and verdict.json token figures miss usage recorded after next-round; trend table shows implementer-only tokens",
    "section": "Defects",
-   "status": "new",
-   "version": "",
-   "ref": "",
+   "status": "shipped",
+   "version": "0.16.0",
+   "ref": "proposal-2026-09-27 A2, C4",
    "reason": ""
   },
   {
@@ -836,10 +836,10 @@
    "source": "docs/inbox/weatherapp/review-loop-tools-0.14.0-2026-09-20.md",
    "title": "Implementers resolved mutate.py themselves and ran the stale 0.13.0 cache copy; implementer.md names no path",
    "section": "Defects",
-   "status": "new",
-   "version": "",
-   "ref": "",
-   "reason": ""
+   "status": "shipped",
+   "version": "0.16.0",
+   "ref": "proposal-2026-09-27 A3, C1",
+   "reason": "Not shipped: pruning stale versions from the plugin cache (declined, C1) — the cache is the harness's."
   },
   {
    "id": "rl-0.14.0-20260920-weatherapp-4",
@@ -849,9 +849,9 @@
    "source": "docs/inbox/weatherapp/review-loop-tools-0.14.0-2026-09-20.md",
    "title": "Manifests over ~4 mutants exceed the Bash tool's 10-minute ceiling; agents split them into scratch copies",
    "section": "Defects",
-   "status": "new",
-   "version": "",
-   "ref": "",
+   "status": "shipped",
+   "version": "0.16.0",
+   "ref": "proposal-2026-09-27 A5",
    "reason": ""
   },
   {
@@ -862,9 +862,9 @@
    "source": "docs/inbox/weatherapp/review-loop-tools-0.14.0-2026-09-20.md",
    "title": "The closeout suites table did not appear: the reviewer's fragment carried no suites key",
    "section": "Defects",
-   "status": "new",
-   "version": "",
-   "ref": "",
+   "status": "shipped",
+   "version": "0.16.0",
+   "ref": "proposal-2026-09-27 A4",
    "reason": ""
   }
  ]

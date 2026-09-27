@@ -84,8 +84,13 @@ def run(td):
     ok(bool(m), "the skill carries the loop-dir allowlist template")
     allow = "\n".join(l.strip() for l in m.group(1).splitlines()) + "\n"
     version = json.load(open(os.path.join(ROOT, ".claude-plugin", "plugin.json")))["version"]
-    ok(f"Managed by {PLUGIN} v{version}" in allow,
-       "allowlist stamp names THIS release (the template changed in it)", allow.splitlines()[0])
+    stamp = re.search(r"Managed by " + re.escape(PLUGIN) + r" v(\d+\.\d+\.\d+)", allow)
+    # The stamp names the release that last CHANGED the template, so it may
+    # trail the plugin version — it can never lead it.
+    ok(bool(stamp) and tuple(map(int, stamp.group(1).split("."))) <= tuple(map(int, version.split(".")))
+       and all(r in allow for r in ("!**/feedback/*.json", "!**/feedback/*.jsonl", "!**/feedback/*.md")),
+       "allowlist is stamped by a release no newer than this one and tracks feedback/",
+       allow.splitlines()[0])
     write(f"{LOOP}/.gitignore", allow)
 
     ledger = {"round": 1, "max_rounds": 5, "token_budget": None,
@@ -468,8 +473,8 @@ def run(td):
     old = os.path.join(td, "oldhost")
     os.makedirs(os.path.join(old, LOOP))
     sh(["git", "init", "-q"], cwd=old)
-    old_allow = "\n".join(l for l in allow.splitlines() if "feedback" not in l).replace(
-        f"v{version}", "v0.12.0") + "\n"
+    old_allow = re.sub(r" v\d+\.\d+\.\d+\.", " v0.12.0.", "\n".join(
+        l for l in allow.splitlines() if "feedback" not in l)) + "\n"
     with open(os.path.join(old, LOOP, ".gitignore"), "w") as fh:
         fh.write(old_allow)
     with open(os.path.join(old, LOOP, "ledger.json"), "w") as fh:

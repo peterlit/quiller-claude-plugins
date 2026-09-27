@@ -24,21 +24,28 @@ done
 # dispatch_stamp.sh (briefs/.dispatched) and strip the ":dispatched" suffix
 # only when it reaches zero — with a single-bit marker the first of two
 # concurrent agents to return unmarked the other, and the Stop hook then
-# blocked ordinary turns (measured). A missing count file means one live
-# dispatch (pre-0.14 state). ":waiting:<reason>" is NOT touched — it is the
-# orchestrator's to clear.
+# blocked ordinary turns (measured). The count is decremented whenever a
+# loop phase is live, WHATEVER the suffix says: a phase write that erased
+# the suffix used to strand the count, and a dispatch made under
+# ":waiting:" is counted too. A missing count file means one live dispatch
+# under ":dispatched" (pre-0.14 state) and none otherwise.
+# ":waiting:<reason>" is NOT touched — it is the orchestrator's to clear.
 for d in "${dirs[@]}"; do
   if [ -f "$d/.phase" ]; then
-    case "$(cat "$d/.phase")" in
-      *:dispatched)
-        left="$(python3 - "$d/briefs/.dispatched" <<'PYEOF'
+    ph="$(cat "$d/.phase")"
+    case "$ph" in
+      round*|seed*)
+        assumed=0
+        case "$ph" in *:dispatched) assumed=1 ;; esac
+        left="$(python3 - "$d/briefs/.dispatched" "$assumed" <<'PYEOF'
 import fcntl, os, sys
-p = sys.argv[1]
+p, assumed = sys.argv[1], int(sys.argv[2])
 try:
     with open(p, "r+") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
-        try: n = int((fh.read() or "1").strip() or 1)
-        except ValueError: n = 1
+        raw = fh.read().strip()
+        try: n = int(raw) if raw else assumed
+        except ValueError: n = assumed
         n = max(0, n - 1)
         fh.seek(0); fh.truncate(); fh.write(f"{n}\n")
 except FileNotFoundError:
@@ -47,8 +54,10 @@ print(n)
 PYEOF
 )"
         if [ "${left:-0}" -le 0 ]; then
-          sed -i '' 's/:dispatched$//' "$d/.phase" 2>/dev/null \
-            || sed -i 's/:dispatched$//' "$d/.phase"
+          case "$ph" in *:dispatched)
+            sed -i '' 's/:dispatched$//' "$d/.phase" 2>/dev/null \
+              || sed -i 's/:dispatched$//' "$d/.phase" ;;
+          esac
         fi ;;
     esac
   fi
@@ -61,9 +70,42 @@ for d in "${dirs[@]}"; do
     *) continue ;;
   esac
   [ -d "$d/fragments" ] || continue
-  python3 - "$d/fragments" <<'EOF' || exit 2
+  python3 - "$d/fragments" "$(cat "$d/.phase")" <<'EOF' || exit 2
 import json, os, re, sys, time
 frag_dir = sys.argv[1]
+# Closeout fragments must carry the suite counts — but only while the
+# CLOSEOUT review is the phase in flight, so a closeout fragment left by an
+# earlier pass never blocks a later reviewer.
+in_closeout = "closeout" in (sys.argv[2] if len(sys.argv) > 2 else "")
+CLOSEOUT_NAME = re.compile(r"round-[A-Za-z0-9._-]*closeout[A-Za-z0-9._-]*\.json")
+
+def check_suites(data):
+    """`suites`: {"<target>": {"executed": n, "failed": n, "skipped": n}}.
+    The report's Closeout table renders from it; "green" once hid 8 of 13 UI
+    tests skipped, and a run that reported 29 executed / 14 skipped only in
+    prose left the table empty (measured, twice)."""
+    if "suites" not in data:
+        raise ValueError(
+            "closeout fragment has no top-level 'suites' — add "
+            '"suites": {"<test target>": {"executed": n, "failed": n, '
+            '"skipped": n}} with one entry per suite you ran; if you ran '
+            'none, "suites": {} plus "suites_note": "<why>"')
+    suites = data["suites"]
+    if not isinstance(suites, dict):
+        raise ValueError("'suites' must be an object of target -> counts")
+    if not suites:
+        note = data.get("suites_note")
+        if not isinstance(note, str) or not note.strip():
+            raise ValueError("'suites' is empty: add \"suites_note\": \"<why no "
+                             "suite ran>\" (e.g. no test targets; fold-in only)")
+    for name, t in suites.items():
+        if not isinstance(t, dict):
+            raise ValueError(f"suites[{name!r}] must be an object")
+        for k in ("executed", "failed", "skipped"):
+            v = t.get(k)
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise ValueError(f"suites[{name!r}].{k} must be a non-negative "
+                                 f"integer, got {v!r}")
 VALID_TC = {"passed", "failed", "blocked", "skipped"}
 # Only police files the merge will actually consume; orchestrator briefs and
 # other artifacts in this directory are not ours to validate (they belong in
@@ -99,6 +141,8 @@ for name in sorted(os.listdir(frag_dir)):
             findings = data.get("findings")
             if not isinstance(findings, list):
                 raise ValueError("no findings array")
+            if in_closeout and CLOSEOUT_NAME.fullmatch(name):
+                check_suites(data)
             for f in findings:
                 for k in ("id", "current_status"):
                     if not f.get(k):
@@ -134,7 +178,8 @@ for name in sorted(os.listdir(frag_dir)):
         print(f"subagent_guard: fragment {path} is invalid ({e}). Write a "
               f"valid JSON fragment — write to a temp file, then mv it into "
               f"place. LEDGER fragments need findings with id/severity/"
-              f"current_status; results fragments need tc + status.",
+              f"current_status; results fragments need tc + status; a "
+              f"closeout fragment also needs suites.",
               file=sys.stderr)
         sys.exit(1)
 EOF

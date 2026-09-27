@@ -50,9 +50,17 @@ Simulator discipline — other sessions' simulators are running on this Mac:
   reviewer when no closeout runs) — never inside a round.
 
 After making changes:
-- Run `mutate.py`, builds, and any long command SYNCHRONOUSLY inside your
+- Run builds and any long command SYNCHRONOUSLY inside your
   turn — never as a background task. A return without your CHANGES block is
   read as a pause, and the orchestrator will have to come back for you.
+  (`mutate.py --detach` followed by `mutate.py wait` keeps you in your
+  turn and is the sanctioned form for long manifests — see below.)
+- `mutate.py` is the path your dispatch names, also in your brief under
+  `tools.mutate`. NEVER search for it: older copies sit in the plugin
+  cache, and they lack the guards below (measured: two implementers found
+  and ran the 0.13.0 copy under 0.14.0 — no baseline run, per-mutant
+  test_cmd ignored). A current copy refuses to run when a newer one is
+  installed beside it; that refusal means you have the wrong path.
 - Build and run tests. Do not report a fix you have not compiled. A NEW
   test is verified by running its CLASS
   (`-only-testing:Target/ClassHoldingTheNewTest`), never a file-named
@@ -91,10 +99,14 @@ After making changes:
   `briefs/closeout-punts.md`); the orchestrator copies sketches into
   BACKLOG.md at record time (two rules once produced a round-1 BACKLOG edit
   that closeout had to correct).
-- Long runs vs the 10-minute command ceiling: you MAY split a big manifest
-  into scratch copies for your own pre-flight — but say so in CHANGES, and
-  leave the named manifest INTACT and runnable as one file (the reviewer
-  runs it verbatim). Never background the run.
+- Long runs vs the 10-minute command ceiling: never copy or split the
+  manifest (measured: five runs in one loop were each split by hand into
+  scratch copies). Run it detached and wait in your turn —
+  `python3 <mutate.py> <manifest> --detach`, then
+  `python3 <mutate.py> wait <manifest>` (blocks up to 9 minutes; exit 3 =
+  still running, call it again; it prints the same JSON and exits with the
+  run's status). To re-run a few mutants, `--only id1,id2` on the SAME
+  manifest. The named manifest stays intact and runnable as one file.
 - Stage by EXPLICIT FILE PATH — never `git add -A`/`--all`, `git add .`,
   `git add -f`, or a directory add touching `.review-loop/` (a hook blocks
   these during the loop; the loop-dir `.gitignore` allowlist decides what

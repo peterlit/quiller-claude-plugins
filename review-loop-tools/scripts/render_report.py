@@ -136,9 +136,10 @@ def main():
     panel = ledger.get("panel") or {}
     if panel:
         L.append("## Panel (multi-provider reviewers)\n")
-        L.append("_Per-lane precision — the drop-or-keep signal. Rejected "
-                 "candidates are counts only; confirmed ones appear among the "
-                 "findings tagged `via panel:<lane>`._\n")
+        L.append("_Per-lane precision — the drop-or-keep signal. Kept = "
+                 "confirmed + demoted (a duplicate of a ledgered finding is "
+                 "never kept). Rejected candidates are counts only; confirmed "
+                 "ones appear among the findings tagged `via panel:<lane>`._\n")
         L.append("| Round | Lane | Filed | Confirmed | Demoted | Duplicate | Rejected | Kept rate |")
         L.append("|---|---|---:|---:|---:|---:|---:|---:|")
         # Numeric rounds in order; labels ("final") after them.
@@ -264,6 +265,11 @@ def main():
                     suites.update(frag["suites"])
             except Exception:
                 pass
+        if not suites:
+            # Say so: an absent table read as "nothing to show" while the
+            # counts (29 executed, 14 skipped) sat in a prose hand-back.
+            L.append("_Suite counts were not reported: no closeout fragment "
+                     "carries `suites`._\n")
         if suites:
             # Structured suite counts: "green" once hid 8 of 13 UI tests
             # skipped by XCTSkipIf (measured) — a Skipped column makes it
@@ -386,9 +392,12 @@ def main():
         if files:
             total = sum(f[0] for f in files)
             top = ", ".join(f"`{p}` (+{a}/-{d})" for _, a, d, p in files[:3])
-            L.append(f"- **closeout diff** `{last_end[:7]}..HEAD` — {len(files)} files, "
-                     f"{total} lines; largest: {top} — look here because: the commit "
-                     f"with no round after it <!-- orchestrator fills -->")
+            # Same slot shape as every other candidate: the pre-filled
+            # reason used to share the line with the fill marker, and the
+            # orchestrator's substitution had to special-case it (measured).
+            L.append(f"- **closeout diff (the commit with no round after it)** "
+                     f"`{last_end[:7]}..HEAD` — {len(files)} files, "
+                     f"{total} lines; largest: {top} — look here because: <!-- orchestrator fills -->")
             diff_cands += 1
     if not shas:
         L.append("- <!-- no round_shas in ledger (set-round records them); list the 3-5 most invasive diffs with commits by hand -->")

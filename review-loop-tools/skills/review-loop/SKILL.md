@@ -36,6 +36,14 @@ You orchestrate an iterative review loop between the `implementer` and
   blocked ordinary turns). An ended turn while the phase says "round…"
   without the suffix is a stall, not a wait. For waits that are not a
   subagent, use `…:waiting:<reason>` (see Waiting, failures, and pauses).
+  Write the phase in its OWN call, BEFORE the dispatch — never in the same
+  batch of tool calls as an Agent call: the dispatch hook reads the marker
+  the instant the call is issued, and a same-batch write lands after it
+  (measured: a closeout implementer dispatched beside its own phase write
+  went unmarked for nine minutes). The count in `briefs/.dispatched` is
+  the source of truth — every dispatch made while a phase is live is
+  counted, under `:waiting:` too, and the Stop hook reads the count — so
+  the suffix is a display you never need to repair by hand.
 - All loop state lives in the TARGET REPO at `.review-loop/`. Never write it into
   the plugin directory.
 - Conclusions in git, evidence and scratch on disk — the loop-dir `.gitignore`
@@ -64,7 +72,14 @@ You orchestrate an iterative review loop between the `implementer` and
    the cost. (Enforced: the first loop dispatch is blocked by a hook when
    the transcript is oversized and no `briefs/.session-ok` marker exists —
    ask the human, then either restart fresh or create the marker.)
-1. If `.review-loop/` holds a FINISHED loop's state (a REPORT.md exists, or
+1. If `.review-loop/` holds a PAUSED loop — `.phase` ends
+   `:waiting:<reason>` or reads `awaiting-human`, usually beside a note in
+   `briefs/` — RESUME it: read the phase and the note, do not archive, and
+   continue from the step the phase names (the session-size gate creates
+   exactly this state when it sends a loop to a fresh session; a field run
+   resumed from an improvised note with nothing lost). Confirm with the
+   human if the pause is older than a day.
+   If it holds a FINISHED loop's state (a REPORT.md exists, or
    `.phase` says done) — or an ABANDONED one (a stale `.phase` or ledger left
    by a previous session; confirm with the human if unsure) — archive it
    before anything else:
@@ -91,8 +106,12 @@ You orchestrate an iterative review loop between the `implementer` and
    (advisory, always exits 0) — and act on every line it prints:
    `git rm --cached` tracked scratch (NEVER delete from disk); when a
    Finder-duplicate name (`X 2.json`, `fragments 2/`) exists and the plain
-   name is missing, the duplicate IS the real file — `mv` it back, and never
-   write to a space-suffixed name. On the `.gitignore` itself: if it is
+   name is missing, the duplicate IS the real file — re-run the check with
+   `--restore`, which moves back every duplicate that is the only one of
+   its name (never overwrites, never deletes) and leaves the ambiguous ones
+   for you; never write to a space-suffixed name. A `tracked file missing`
+   line is a conclusion that vanished under some other name: compare the
+   candidate it names, then `mv` it back. On the `.gitignore` itself: if it is
    missing, the plugin's own old three-line denylist (`fragments/`,
    `briefs/`, `.phase`), or an earlier "Managed by review-loop-tools"
    allowlist, write exactly this default-closed allowlist; any OTHER
@@ -232,7 +251,10 @@ fix_risk — a minor that changes shipped behavior belongs in a round where
 iteration can catch a bad fix; plain test/doc/polish minors wait for the
 one closeout pass), and sets the phase marker.
 1. Dispatch `implementer` with the brief + the reviewer's latest summary
-   (the Agent-tool hook stamps `:dispatched` for you). Wait for its CHANGES
+   + `${CLAUDE_PLUGIN_ROOT}/scripts/mutate.py` as THE mutation runner (the
+   brief's `tools.mutate` carries the same path; an implementer that
+   searched for the script ran a stale cached copy — measured, twice in one
+   loop) (the Agent-tool hook stamps `:dispatched` for you). Wait for its CHANGES
    block and confirm it committed; note the task result's token count — you
    pass it to next-round in step 3 (no separate set-usage call). Record a
    dispatch's tokens from its FIRST completion notification only: a
@@ -254,7 +276,14 @@ one closeout pass), and sets the phase marker.
    advance to N+1 with its brief and phase marker:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py next-round .review-loop <N> --fragment .review-loop/fragments/round-<N>.json --usage implementer=<tokens> --usage reviewer=<tokens>`
    It records both costs, prints the verdict (`decision`, open counts) and,
-   on `continue`, the next round's brief path.
+   on `continue`, the next round's brief path. A dispatch's hand-back can
+   arrive BEFORE the notification carrying its token count: close the round
+   on the hand-back, and when the notification arrives record the figure —
+   `merge_ledger.py set-usage .review-loop/ledger.json <N> reviewer <tokens>`
+   — which now also corrects the round's row in rounds.md and verdict.json.
+   If its output says `"over_budget": true`, take the BUDGET path now
+   (stop, closeout, report): the metrics that closed the round never saw
+   that figure.
 4. Act on `decision`: `continue` -> go to round N+1. `thrashing_soft` ->
    if a human can answer, write "awaiting-human" to `.review-loop/.phase`,
    STOP, and ask — the verdict's reason tells you which question: below the
@@ -322,19 +351,27 @@ severity — the loop created these regressions and must not ship them to
 BACKLOG), plus open minors. Open majors that are NOT introduced_by_fix are
 never closed out — they stopped the loop for a reason a human should see.
 1. `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py open .review-loop/ledger.json closeout > .review-loop/briefs/closeout-brief.json`
-   — the verb encodes eligibility; no hand filtering. Empty result: skip
-   closeout.
+   — the verb encodes eligibility; no hand filtering. Empty `findings`:
+   skip closeout.
 2. ONE `implementer` dispatch scoped to exactly those findings (phase
-   "round-<N>-implementing").
+   "round-<N>-implementing"), naming
+   `${CLAUDE_PLUGIN_ROOT}/scripts/mutate.py` as in a round.
 2b. Before accepting the closeout CHANGES block, enforce: its verify_cmd
    must RUN every test target the diff touches — a build is not a test
    (`build-for-testing` once shipped a red target). Check
    `git diff --name-only <closeout range>`; any path under a test target
    (…Tests/, …UITests/) whose target is absent from verify_cmd -> reject
    the block, have the implementer run it and resubmit.
-3. ONE `skeptical-reviewer` dispatch verifying ONLY those fixes: the sha
+3. ONE `skeptical-reviewer` dispatch verifying ONLY those fixes — phase
+   "round-<N>-closeout-review", written in its own call first: the sha
    range of the closeout commit, fragment
-   `.review-loop/fragments/round-<N>-closeout.json`, merged with
+   `.review-loop/fragments/round-<N>-closeout.json`, which MUST carry the
+   suite counts — top-level `"suites": {"<test target>": {"executed": n,
+   "failed": n, "skipped": n}}`, one entry per suite it ran (say so in the
+   dispatch; a hook refuses a closeout fragment without it, and the
+   report's Closeout table renders from it — a run once reported 29
+   executed / 14 skipped only in prose). A fold-in-only pass that runs no
+   suite writes `"suites": {}` and `"suites_note": "<why>"`. Merged with
    `--no-escalate` (escalation exists to buy rounds; by closeout there are
    none to buy, and a bump here leaves misleading state):
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge_ledger.py .review-loop/ledger.json .review-loop/fragments/round-<N>-closeout.json <N> --no-escalate`
@@ -441,12 +478,15 @@ merge_ledger.py's verbs:
 - merge:     `merge_ledger.py <ledger> <fragment> <round>`
 - resolve:   `merge_ledger.py resolve <ledger> <id> <status> <round> "<note>"`
 - set-round: `merge_ledger.py set-round <ledger> <N> [sha]`
-- open:      `merge_ledger.py open <ledger> [auto|proposal|all|closeout] [--region X]` (open+partial findings, for briefs)
+- open:      `merge_ledger.py open <ledger> [auto|proposal|all|closeout] [--region X]` (open+partial findings, for briefs;
+  the output also carries `tools`: the absolute paths of THIS release's agent-facing scripts)
 - archive:   `merge_ledger.py archive .review-loop [name]`
 - scope:     `merge_ledger.py scope <ledger> <a..b>` (the change under review; first watch-list candidate)
 - diff:      `merge_ledger.py diff <loop-dir> <N> <a..b>` (materialize the round diff + stat for subagents)
 - set-usage: `merge_ledger.py set-usage <ledger> <N> <role> <tokens>` REPLACES a (round, role) figure;
   add-usage accumulates (for many dispatches sharing a role). Tokens column; feeds token_budget.
+  Both also rewrite that round's Tokens cell in rounds.md and the token figures in verdict.json, and
+  print `over_budget` — usage recorded after next-round is no longer invisible to the report or the budget.
   Scale is WORKLOAD-DEPENDENT: measured ~4x below billed effective for code loops, ~11x for
   simulator loops — the ratio grows with turns per dispatch; budget on the reported scale.
   next-round takes repeatable `--usage role=tokens` (replace semantics) so no separate calls are needed.
@@ -471,8 +511,10 @@ adds while a loop is LIVE — `.phase` at round*/seed*/awaiting-human; a
 finished loop's `done` arms nothing — (stage by explicit path), and enforces
 the optional env knobs on commits;
 `dispatch_stamp` marks `:dispatched` when you call the Agent tool and counts
-live dispatches in `briefs/.dispatched` (the SubagentStop hook decrements
-and strips the mark at zero);
+live dispatches in `briefs/.dispatched` — every dispatch, `:waiting:`
+included (the SubagentStop hook decrements and strips the mark at zero;
+the Stop hook reads the count, not the suffix; set-round and next-round
+reset a count left above zero and record it);
 `session_guard` reports the session transcript size when a loop is invoked
 and stands down once `briefs/.session-ok` exists;
 `dispatch_stamp` and the SubagentStop hook also record each dispatch's start
@@ -482,12 +524,18 @@ token cost — never time dispatches by hand);
 strings that merely contain a test command are not test runs.
 Merges record severity changes in `severity_history` (the Promoted column).
 Other scripts: `render_report.py <loop-dir>` (the report), `hotspots.py`
-(cold-review map), `mutate.py <manifest> [--allow-dirty]` (re-run an
+(cold-review map), `mutate.py <manifest> [--only id,id] [--detach] [--allow-dirty]` (re-run an
 implementer's mutation claims in an isolated worktree: runs each test_cmd
 unmutated first and refuses a red baseline, refuses uncommitted changes to
-the manifest's files, honors a per-mutant `test_cmd`), `hygiene_check.sh <loop-dir>` (advisory
+the manifest's files, honors a per-mutant `test_cmd`, refuses to run as a
+stale copy when a newer plugin version is installed beside it; `--only`
+runs a subset of the named manifest, `--detach` + `mutate.py wait
+<manifest>` runs one longer than the 10-minute command ceiling — exit 3 =
+still running, call wait again), `hygiene_check.sh <loop-dir> [--restore]` (advisory
 git-hygiene report: tracked scratch, Finder-duplicate names, oversized
-tracked files, denylist-style ignores — run at Setup and before the report),
+tracked files, denylist-style ignores, tracked files missing from disk —
+run at Setup and before the report; `--restore` moves back unambiguous
+duplicates),
 `run_summary.py <loop-dir>` (the maintainer's run record; render_report
 calls it), `loop_usage.py --since <t>` (effective tokens per role from this
 repo's session transcripts — the measurement `/review-loop-tools:feedback`

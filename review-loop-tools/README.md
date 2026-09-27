@@ -50,7 +50,11 @@ and `verdict.json` are tracked (at any depth, so archived conclusions under
 unanticipated (a Finder-duplicated `ledger 2.json`, say) never enter the
 index. Staging is by explicit file path — a hook blocks `git add -A`/`.`/
 `-f`/directory adds while a loop is live — and a hygiene check at setup and
-report time flags tracked scratch, duplicate names, and oversized files.
+report time flags tracked scratch, duplicate names, oversized files, and
+tracked files missing from disk. After a sync outage or a sync toggle,
+`hygiene_check.sh .review-loop --restore` moves back every ` 2`-style
+duplicate that is the only one of its name; it never overwrites or
+deletes.
 Each new loop
 archives the previous run's state into `.review-loop/archive/<name>/`
 automatically, and after any stop a **closeout** cycle fixes and re-verifies
@@ -119,7 +123,11 @@ the WATCH LIST), `hotspots.py` gives a cold review a churn-ranked map of
 where defects concentrate, and `mutate.py` re-runs an implementer's
 mutation-testing claims in an isolated `git worktree` from a manifest the
 implementer names in its CHANGES block — so "8/8 mutants killed" is
-verified, not trusted. The trend table also gains a Promoted column so a
+verified, not trusted. A manifest longer than the 10-minute command
+ceiling runs with `--detach` and `mutate.py wait`; `--only id1,id2` re-runs
+a subset of the same manifest; and a copy refuses to run when a newer
+version of the plugin is installed beside it, so an agent that finds an
+old copy in the plugin cache is told the right path. The trend table also gains a Promoted column so a
 severity promotion on new evidence no longer looks like a regression.
 
 ## Measured cost controls (0.7.0)

@@ -282,7 +282,8 @@ def hygiene(loop):
     kinds = {}
     for l in lines:
         k = next((name for name in ("scratch tracked", "duplicate name",
-                                    "large tracked file") if name in l), "gitignore")
+                                    "large tracked file", "tracked file missing",
+                                    "restored") if name in l), "gitignore")
         kinds[k] = kinds.get(k, 0) + 1
     return {"ran": True, "violation_count": len(lines), "by_kind": kinds}
 

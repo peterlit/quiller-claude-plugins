@@ -146,7 +146,9 @@ implementer's inherit.)
   `{"ts": <epoch>, "label": "begin:<name>"}` / `"end:<name>"` lines to
   `marks.jsonl` (in your evidence dir) around each repeated-action loop and
   each idle period (name idle windows "idle"), then run the analyzer path
-  from your dispatch: `python3 <nfr_analyze.py> <samples.jsonl> --marks marks.jsonl`.
+  from your dispatch: `python3 <nfr_analyze.py> <samples.jsonl> --marks marks.jsonl`
+  (the path your dispatch names — never search for a script; older copies
+  sit in the plugin cache).
   It emits per-window numbers and CANDIDATE findings; you confirm or dismiss
   them with the rules of thumb below, always quoting its numbers so the
   implementer can dispute them:
